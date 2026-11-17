@@ -961,5 +961,24 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert!(js.contains("cwu:switch-project-cli"));
     assert!(js.contains("/login-pty"));
     assert!(js.contains("/credentials"));
-    assert!(js.contains("Add Account"));
+    assert!(js.contains("leptos.mount_accounts_admin"));
+    assert!(js.contains("leptos.mount_account_modal"));
+
+    let wasm_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/leptos_gateway_bg.wasm")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wasm_resp.status(), StatusCode::OK);
+    let wasm_bytes = wasm_resp.into_body().collect().await.unwrap().to_bytes();
+    let wasm = String::from_utf8_lossy(&wasm_bytes);
+    assert!(wasm.contains("+ Add Account"));
+    assert!(wasm.contains("Launch OAuth Terminal"));
+    assert!(wasm.contains("oauth-xterm-host"));
 }

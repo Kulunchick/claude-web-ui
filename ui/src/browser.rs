@@ -195,6 +195,28 @@ pub fn mount_agents_skills_mcp(parent: HtmlElement, workspace: &str) -> Result<(
 }
 
 #[wasm_bindgen]
+pub fn mount_accounts_admin(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
+    let state: crate::accounts_admin_view::AccountsAdminState =
+        serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        view! { <crate::accounts_admin_view::AccountsAdminWorkspace state=state /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn mount_account_modal(parent: HtmlElement, modal: &str) -> Result<(), JsValue> {
+    let modal: crate::accounts_admin_view::AccountModalState =
+        serde_json::from_str(modal).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        view! { <crate::accounts_admin_view::AccountAuthModal modal=modal /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+#[wasm_bindgen]
 pub fn mount_files_git(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
     let state: crate::files_git_view::WorkspaceBrowserState =
         serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;

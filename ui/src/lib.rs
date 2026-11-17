@@ -1,6 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 mod browser;
 
+pub mod accounts_admin_view;
 pub mod accounts_view;
 pub mod agents_skills_mcp_view;
 pub mod asm_workspace_view;

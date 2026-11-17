@@ -578,169 +578,6 @@
     }
   });
 
-  function renderAccountsTab() {
-    const accountCards = state.adminAccounts.map((acc) => {
-      const creds = acc.credential_files && acc.credential_files.length > 0
-        ? `Credentials: ${acc.credential_files.map(esc).join(", ")}`
-        : "Not authenticated yet";
-      return `
-        <article class="panel-card account-card">
-          <div class="panel-header-row">
-            <strong>${esc(acc.name)}</strong>
-            <span class="role-badge">${esc(PROVIDER_LABELS[acc.provider] || acc.provider)}</span>
-          </div>
-          <p class="project-path">${esc(acc.profile_dir)}</p>
-          <p class="subtitle">${creds}</p>
-          <div class="btn-group">
-            <button class="btn-secondary" data-auth-acc="${esc(acc.id)}">OAuth / Credentials</button>
-            <button class="btn-secondary" data-rename-acc="${esc(acc.id)}">Rename</button>
-            <button class="btn-danger" data-del-acc="${esc(acc.id)}">Delete</button>
-          </div>
-        </article>`;
-    }).join("");
-
-    const projectOptions = state.projects.map((p) =>
-      `<option value="${esc(p.id)}" ${p.id === state.aclProjectId ? "selected" : ""}>${esc(p.name)}</option>`
-    ).join("");
-
-    const devMembers = state.aclMembers.filter((m) => m.role === "developer");
-    const aclRows = devMembers.map((m) => {
-      const acl = state.aclList.find((a) => a.user_id === m.user_id) || { restricted: false, allowed_accounts: [] };
-      const accountCheckboxes = state.adminAccounts.map((acc) => {
-        const checked = acl.restricted && acl.allowed_accounts.includes(acc.id) ? "checked" : "";
-        return `
-          <label class="checkbox-item">
-            <input type="checkbox" data-acl-acc="${esc(m.user_id)}" value="${esc(acc.id)}" ${checked} />
-            ${esc(acc.name)} (${esc(PROVIDER_LABELS[acc.provider] || acc.provider)})
-          </label>`;
-      }).join("");
-      return `
-        <div class="panel-card">
-          <div class="panel-header-row">
-            <strong>${esc(m.username)}</strong>
-            <label class="checkbox-item">
-              <input type="checkbox" data-acl-unrestricted="${esc(m.user_id)}" ${!acl.restricted ? "checked" : ""} />
-              Unrestricted (All Accounts)
-            </label>
-          </div>
-          <div class="checkbox-list">${accountCheckboxes || "<span class='subtitle'>No CLI accounts created yet.</span>"}</div>
-          <button class="btn-secondary" data-save-acl="${esc(m.user_id)}">Save ACL</button>
-        </div>`;
-    }).join("");
-
-    return `
-      <section class="panel-card">
-        <div class="panel-header-row">
-          <div>
-            <h2>CLI Accounts &amp; OAuth Profiles</h2>
-            <p class="subtitle">Isolated credentials per account with shared provider sessions &amp; skills.</p>
-          </div>
-          <button class="btn-primary" id="open-add-account-btn" type="button">+ Add Account</button>
-        </div>
-        <div class="admin-grid">${accountCards || "<p class='subtitle'>No CLI accounts yet.</p>"}</div>
-      </section>
-      <section class="panel-card">
-        <h3>Developer Account ACLs</h3>
-        <div class="form-group">
-          <label>Project</label>
-          <select id="acl-project-select">${projectOptions || "<option value=''>No projects</option>"}</select>
-        </div>
-        ${aclRows || "<p class='subtitle'>No Developer members assigned to this project.</p>"}
-      </section>`;
-  }
-
-  function renderAddAccountModal() {
-    const modal = state.addAccountModal;
-    if (!modal) return "";
-
-    if (modal.step === "create") {
-      return `
-        <div class="modal-backdrop">
-          <div class="modal-card">
-            <div class="panel-header-row">
-              <h3>Add Account</h3>
-              <button class="btn-secondary" id="close-account-modal" type="button">Close</button>
-            </div>
-            <form id="create-account-form">
-              <div class="form-group">
-                <label>CLI Provider</label>
-                <select name="provider">
-                  <option value="claude_code">Claude Code</option>
-                  <option value="codex">Codex</option>
-                  <option value="antigravity">Antigravity</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Account Name</label>
-                <input name="name" placeholder="e.g. Work, Personal" required />
-              </div>
-              <button class="btn-primary" type="submit">Create Profile &amp; Authenticate</button>
-            </form>
-          </div>
-        </div>`;
-    }
-
-    const acc = state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account;
-    const credFilesHtml = (acc.credential_files || []).map((f) => `
-      <div class="row">
-        <code>${esc(f)}</code>
-        <button class="btn-danger" data-del-cred="${esc(f)}" type="button">Delete</button>
-      </div>
-    `).join("");
-
-    const bodyHtml = modal.tab === "credentials"
-      ? `
-        <form id="upload-cred-form">
-          <div class="form-group">
-            <label>Choose Credential File (.credentials.json, .claude.json, auth.json)</label>
-            <input type="file" id="cred-file-picker" />
-          </div>
-          <div class="form-group">
-            <label>Target Filename</label>
-            <input id="cred-filename" name="filename" value=".credentials.json" required />
-          </div>
-          <div class="form-group">
-            <label>Paste Credential Content</label>
-            <textarea id="cred-content" name="content" rows="6" required></textarea>
-          </div>
-          <button class="btn-primary" type="submit">Save Credential File</button>
-        </form>
-        <div style="margin-top: 14px;">
-          <h4>Stored Credential Files</h4>
-          ${credFilesHtml || "<p class='subtitle'>No credential files uploaded yet.</p>"}
-        </div>`
-      : `
-        <div class="btn-group" style="margin-bottom: 10px;">
-          <button class="btn-secondary" id="launch-oauth-pty-btn" type="button">Launch OAuth Terminal</button>
-        </div>
-        <div id="oauth-xterm-host" class="xterm-container">
-          <pre id="oauth-xterm-fallback" class="xterm-fallback-log">Click "Launch OAuth Terminal" to start ${esc(PROVIDER_LABELS[acc.provider] || acc.provider)} login...</pre>
-          <form id="oauth-fallback-input-form" style="display:none; gap:8px;">
-            <input id="oauth-fallback-input" placeholder="Paste OAuth code and press Enter..." />
-            <button class="btn-secondary" type="submit">Send</button>
-          </form>
-        </div>`;
-
-    return `
-      <div class="modal-backdrop">
-        <div class="modal-card">
-          <div class="panel-header-row">
-            <div>
-              <h3>Authenticate: ${esc(acc.name)}</h3>
-              <span class="role-badge">${esc(PROVIDER_LABELS[acc.provider] || acc.provider)}</span>
-            </div>
-            <button class="btn-secondary" id="close-account-modal" type="button">Close</button>
-          </div>
-          <div class="tab-bar">
-            <button class="btn-secondary ${modal.tab === "pty" ? "active" : ""}" id="modal-tab-pty" type="button">OAuth Terminal (xterm.js)</button>
-            <button class="btn-secondary ${modal.tab === "credentials" ? "active" : ""}" id="modal-tab-creds" type="button">Upload / Paste Credentials</button>
-          </div>
-          ${bodyHtml}
-        </div>
-      </div>`;
-  }
-
-
   function renderDashboard() {
     closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
@@ -752,7 +589,7 @@
     if (state.tab === "admin" && isAdmin) {
       mainHtml = '<div id="admin-workspace"></div>';
     } else if (state.tab === "accounts" && isAdmin) {
-      mainHtml = renderAccountsTab();
+      mainHtml = '<div id="accounts-workspace"></div>';
     } else if (state.tab === "agents_skills_mcp") {
       mainHtml = '<div id="asm-workspace"></div>';
     } else if (!activeProject) {
@@ -805,7 +642,7 @@
           ${errHtml}${okHtml}${mainHtml}
         </main>
       </div>
-      ${renderAddAccountModal()}
+      <div id="account-modal-host"></div>
     `;
 
     leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
@@ -831,6 +668,21 @@
         diff_mode: state.diffMode,
         diff_path: state.diffPath,
       }));
+    }
+    const accounts = document.getElementById("accounts-workspace");
+    if (accounts) {
+      leptos.mount_accounts_admin(accounts, JSON.stringify({
+        accounts: state.adminAccounts,
+        projects: state.projects,
+        acl_project_id: state.aclProjectId,
+        acl_members: state.aclMembers,
+        acl_list: state.aclList,
+      }));
+    }
+    const modal = state.addAccountModal;
+    if (modal) {
+      const account = modal.step === "create" ? null : (state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account);
+      leptos.mount_account_modal(document.getElementById("account-modal-host"), JSON.stringify({ step: modal.step, tab: modal.tab || "pty", account }));
     }
     const asm = document.getElementById("asm-workspace");
     if (asm) {
