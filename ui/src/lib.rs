@@ -7,6 +7,7 @@ pub mod agents_skills_mcp_view;
 pub mod asm_workspace_view;
 pub mod auth_view;
 pub mod chat_view;
+pub mod chat_workspace_view;
 pub mod cron_view;
 pub mod files_git_view;
 pub mod kanban_view;

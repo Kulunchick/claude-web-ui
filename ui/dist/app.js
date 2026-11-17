@@ -1,10 +1,4 @@
 (() => {
-  const PROVIDER_LABELS = {
-    claude_code: "Claude Code",
-    codex: "Codex",
-    antigravity: "Antigravity",
-  };
-
   const desktop = Object.hasOwn(window, "__CWU_DESKTOP_ACCESS_TOKEN");
 
   const state = {
@@ -292,8 +286,7 @@
           state.activeSessionDetail = latest;
           const feed = state.tab === "overview" && state.projectTab === "chat" && app.querySelector(".chat-feed");
           if (feed) {
-            feed.innerHTML = renderNativeMessages(latest.native_messages)
-              || "<p class='subtitle'>Select or create a session and send a prompt.</p>";
+            leptos.mount_native_feed(feed, JSON.stringify(latest.native_messages || []));
           }
         }
       } catch {
@@ -607,7 +600,7 @@
           <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
           <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
         </div>
-        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
+        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>'}
       `;
     }
 
@@ -669,6 +662,31 @@
         diff_path: state.diffPath,
       }));
     }
+    const chat = document.getElementById("chat-workspace-host");
+    if (chat && activeProject) {
+      const isViewer = state.user.role === "viewer";
+      const detail = state.activeSessionDetail;
+      const activeSess = detail ? detail.session : state.sessions.find((s) => s.id === state.activeSessionId) || null;
+      const selectedProvider = state.projectCli?.active_provider;
+      const nativeSource = displaysNativeTranscript(detail);
+      leptos.mount_chat_workspace(chat, JSON.stringify({
+        project_name: activeProject.name,
+        workspace_path: activeProject.workspace_path,
+        is_viewer: isViewer,
+        sessions: state.sessions,
+        active_session_id: state.activeSessionId,
+        session_search: state.sessionSearch || "",
+        handoff_provider: !isViewer && activeSess?.message_count && activeSess.provider !== selectedProvider ? selectedProvider : null,
+        has_active_session: Boolean(activeSess),
+        approval_mode: activeSess ? activeSess.approval_mode : "full_auto",
+        has_active_turn: Boolean(state.schedulerStatus && state.schedulerStatus.active_session_id === state.activeSessionId),
+        show_terminal: Boolean(state.showProjectTerminal),
+        can_switch_source: Boolean(detail?.session.transcript_path && detail.turns?.length),
+        native_source: nativeSource,
+        native_messages: nativeSource ? detail.native_messages || [] : [],
+        turns: !nativeSource && detail?.turns ? detail.turns : [],
+      }));
+    }
     const accounts = document.getElementById("accounts-workspace");
     if (accounts) {
       leptos.mount_accounts_admin(accounts, JSON.stringify({
@@ -705,166 +723,6 @@
     const admin = document.getElementById("admin-workspace");
     if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
     bindDashboardHandlers();
-  }
-
-  function renderTurnEvent(ev) {
-    switch (ev.type) {
-      case "text_delta":
-        return `<div class="event-text">${esc(ev.text)}</div>`;
-      case "thinking_delta":
-        return `<details class="event-thinking"><summary>Thinking</summary><pre>${esc(ev.text)}</pre></details>`;
-      case "tool_call_start":
-        return `<div class="event-tool-card"><strong>Tool: ${esc(ev.name)}</strong><pre>${esc(JSON.stringify(ev.input, null, 2))}</pre></div>`;
-      case "tool_call_result":
-        return `<div class="event-tool-result ${ev.is_error ? "error" : ""}"><pre>${esc(ev.output)}</pre></div>`;
-      case "subagent_start":
-        return `<div class="role-badge">Subagent started: ${esc(ev.name)}</div>`;
-      case "subagent_end":
-        return `<div class="role-badge">Subagent finished: ${esc(ev.id)}</div>`;
-      case "permission_request":
-        return `<div class="subtitle">Requested approval for ${esc(ev.tool_name)}</div>`;
-      case "turn_complete":
-        return ev.result_text ? `<div class="event-complete">${esc(ev.result_text)}</div>` : "";
-      case "turn_error":
-        return `<div class="alert-error">${esc(ev.message)}</div>`;
-      default:
-        return "";
-    }
-  }
-
-  function renderNativeMessages(messages = []) {
-    return messages.map((message) => `
-      <article class="turn-card">
-        <strong>${esc(message.role)}${message.tool_name ? ` (${esc(message.tool_name)})` : ""}</strong>
-        <pre class="event-text">${esc(message.text)}</pre>
-      </article>`).join("");
-  }
-
-  function renderProjectWorkspace(activeProject) {
-    if (!activeProject) {
-      return `
-        <section class="panel-card">
-          <h2>No Project Selected</h2>
-          <p class="subtitle">Ask an Admin to assign you to a project workspace.</p>
-        </section>`;
-    }
-    const isViewer = state.user.role === "viewer";
-    const detail = state.activeSessionDetail;
-    const activeSess = detail ? detail.session : state.sessions.find((s) => s.id === state.activeSessionId) || null;
-    const selectedProvider = state.projectCli?.active_provider;
-    const handoffProvider = !isViewer && activeSess?.message_count && activeSess.provider !== selectedProvider
-      ? selectedProvider
-      : null;
-    const sessionListHtml = state.sessions.map((s) => `
-      <li>
-        <button class="session-item ${s.id === state.activeSessionId ? "active" : ""}" data-sid="${esc(s.id)}">
-          <div class="panel-header-row" style="margin-bottom:4px;">
-            <strong>${esc(s.title)}</strong>
-            <span class="role-badge">${esc(PROVIDER_LABELS[s.provider] || s.provider)}</span>
-          </div>
-          <div class="subtitle" style="margin:0;font-size:0.78rem;">
-            <span>${esc(s.source)}</span>
-            ${s.native_session_id ? ` Ã¢â‚¬Â¢ <code>${esc(s.native_session_id)}</code>` : ""}
-          </div>
-        </button>
-      </li>
-    `).join("");
-
-    const nativeSource = displaysNativeTranscript(detail);
-    const nativeHtml = nativeSource ? renderNativeMessages(detail.native_messages) : "";
-    const canSwitchChatSource = Boolean(detail?.session.transcript_path && detail.turns?.length);
-
-    const turnsHtml = !nativeSource && detail?.turns ? detail.turns.map((t) => {
-      const pending = t.pending_permission;
-      const approvalCard = pending && !isViewer ? `
-        <div class="approval-card" data-view="approval-prompt">
-          <strong>Permission Request: ${esc(pending.tool_name)}</strong>
-          <pre>${esc(JSON.stringify(pending.input, null, 2))}</pre>
-          <div class="btn-group">
-            <button class="btn-primary" data-allow-turn="${esc(t.id)}" data-req-id="${esc(pending.request_id)}" type="button">Allow</button>
-            <button class="btn-danger" data-deny-turn="${esc(t.id)}" data-req-id="${esc(pending.request_id)}" type="button">Deny</button>
-          </div>
-        </div>` : "";
-      return `
-        <article class="turn-card">
-          <div class="panel-header-row" style="margin-bottom:6px;">
-            <strong>Prompt</strong>
-            <span class="role-badge">${esc(t.status)}</span>
-          </div>
-          <p style="margin:0 0 8px;">${esc(t.prompt)}</p>
-          <div class="turn-events">${(t.events || []).map(renderTurnEvent).join("")}</div>
-          ${t.error_message ? `<div class="alert-error">${esc(t.error_message)}</div>` : ""}
-          ${approvalCard}
-        </article>`;
-    }).join("") : "";
-
-    const approvalMode = activeSess ? activeSess.approval_mode : "full_auto";
-    const approvalLabel = approvalMode === "interactive" ? "Mode: Interactive Approval" : "Mode: Full Auto";
-    const hasActiveTurn = state.schedulerStatus && state.schedulerStatus.active_session_id === state.activeSessionId;
-
-    const terminalHtml = state.showProjectTerminal && !isViewer ? `
-      <div class="panel-card" style="margin-top:14px;">
-        <div class="panel-header-row">
-          <strong>Project Terminal (xterm.js)</strong>
-          <div class="btn-group">
-            <button class="btn-secondary" id="term-mode-shell" type="button">Workspace Shell</button>
-            <button class="btn-secondary" id="term-mode-cli" type="button">Resume CLI</button>
-            <button class="btn-secondary" id="close-project-term" type="button">Close</button>
-          </div>
-        </div>
-        <div id="project-xterm-host" class="xterm-container">
-          <pre id="project-xterm-fallback" class="xterm-fallback-log">Connecting to project terminal...</pre>
-          <form id="project-xterm-fallback-form" style="display:none; gap:8px;">
-            <input id="project-xterm-fallback-input" placeholder="Type command and press Enter..." />
-            <button class="btn-secondary" type="submit">Send</button>
-          </form>
-        </div>
-      </div>` : "";
-
-    return `
-      <section class="chat-workspace" data-view="chat-workspace">
-        <aside class="chat-sessions-panel panel-card" data-view="session-list">
-          <div class="panel-header-row">
-            <h3>Sessions</h3>
-            ${!isViewer ? `<button class="btn-primary" id="new-chat-session-btn" type="button">+ New Chat</button>` : ""}
-          </div>
-          <div class="form-group">
-            <input id="session-search-input" type="search" placeholder="Search sessions..." value="${esc(state.sessionSearch)}" />
-          </div>
-          <ul class="session-list">${sessionListHtml || "<li class='subtitle'>No sessions yet.</li>"}</ul>
-        </aside>
-
-        <div class="chat-main-panel panel-card" data-view="chat-stream">
-          <div class="panel-header-row">
-            <div>
-              <h2 style="margin:0;">${esc(activeProject.name)}</h2>
-              <p class="project-path" style="margin:4px 0 0;">${esc(activeProject.workspace_path)}</p>
-            </div>
-            ${!isViewer ? `
-              <div class="btn-group">
-                ${handoffProvider ? `<button class="btn-secondary" id="chat-handoff" data-provider="${esc(handoffProvider)}" type="button">Continue with ${esc(PROVIDER_LABELS[handoffProvider])}</button>` : ""}
-                ${activeSess ? `<button class="btn-secondary" id="toggle-approval-mode-btn" type="button">${approvalLabel}</button>` : ""}
-                <button class="btn-secondary" id="toggle-project-terminal-btn" type="button">${state.showProjectTerminal ? "Hide Terminal" : "Project Terminal"}</button>
-                ${activeSess && hasActiveTurn ? `<button class="btn-danger" id="stop-active-turn-btn" type="button">Stop</button>` : ""}
-              </div>` : `<span class="role-badge">Read-Only Stream</span>`}
-          </div>
-
-          ${canSwitchChatSource ? `<button class="btn-secondary" id="chat-feed-source" type="button">${nativeSource ? "Gateway Turns" : "Native Transcript"}</button>` : ""}
-          <div class="chat-feed">
-            ${nativeHtml}${turnsHtml || (!nativeHtml ? "<p class='subtitle'>Select or create a session and send a prompt.</p>" : "")}
-          </div>
-
-          ${!isViewer ? `
-            <form id="chat-prompt-form" class="chat-composer">
-              <textarea id="chat-prompt-input" rows="3" placeholder="Send prompt to active CLI..." required></textarea>
-              <div class="btn-group" style="margin-top:8px;">
-                <button class="btn-primary" type="submit" style="width:auto;">Send Prompt</button>
-              </div>
-            </form>` : ""}
-
-          ${terminalHtml}
-        </div>
-      </section>`;
   }
 
   function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {

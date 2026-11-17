@@ -160,7 +160,6 @@ fn agents_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
     let rows = state
         .agents
         .iter()
-        .cloned()
         .map(|a| {
             let model = a.model.clone().unwrap_or_else(|| "inherit".into());
             view! {
@@ -280,7 +279,6 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
     let rows = state
         .skills
         .iter()
-        .cloned()
         .map(|s| {
             let shared = if s.is_shared { "true" } else { "false" };
             view! {
@@ -308,7 +306,6 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
     let comp_rows = sel
         .companion_files
         .iter()
-        .cloned()
         .map(|c| {
             view! {
                 <div class="row">

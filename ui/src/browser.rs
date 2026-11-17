@@ -15,10 +15,14 @@ use wasm_bindgen::prelude::*;
 thread_local! {
     // The dashboard owns the host element and replaces it when changing views.
     static MOUNTS: RefCell<Vec<Box<dyn std::any::Any>>> = RefCell::new(Vec::new());
+    // Views the dashboard refreshes in place without re-rendering the page,
+    // so an open terminal or socket survives the update.
+    static LIVE_FEED: RefCell<Option<Box<dyn std::any::Any>>> = const { RefCell::new(None) };
 }
 
 #[wasm_bindgen]
 pub fn unmount_gateway_view() {
+    LIVE_FEED.with(|feed| feed.borrow_mut().take());
     MOUNTS.with(|mounts| mounts.borrow_mut().clear());
 }
 
@@ -213,6 +217,31 @@ pub fn mount_account_modal(parent: HtmlElement, modal: &str) -> Result<(), JsVal
         view! { <crate::accounts_admin_view::AccountAuthModal modal=modal /> }
     });
     MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn mount_chat_workspace(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
+    let state: crate::chat_workspace_view::ChatWorkspaceState =
+        serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        view! { <crate::chat_workspace_view::ChatWorkspace state=state /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+/// Replaces the contents of the chat feed with the latest native transcript.
+#[wasm_bindgen]
+pub fn mount_native_feed(feed: HtmlElement, messages: &str) -> Result<(), JsValue> {
+    let messages: Vec<crate::chat_workspace_view::NativeMessage> =
+        serde_json::from_str(messages).map_err(|err| JsValue::from(err.to_string()))?;
+    LIVE_FEED.with(|live| live.borrow_mut().take());
+    feed.set_inner_html("");
+    let handle = mount_to(feed, move || {
+        view! { <crate::chat_workspace_view::NativeTranscriptFeed messages=messages /> }
+    });
+    LIVE_FEED.with(|live| *live.borrow_mut() = Some(Box::new(handle)));
     Ok(())
 }
 

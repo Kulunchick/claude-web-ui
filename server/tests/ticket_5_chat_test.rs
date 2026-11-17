@@ -1536,7 +1536,8 @@ async fn embedded_ui_serves_chat_workspace_approvals_and_project_terminal() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let js = String::from_utf8_lossy(&body);
-    assert!(js.contains("chat-workspace"));
+    assert!(js.contains("leptos.mount_chat_workspace"));
+    assert!(js.contains("leptos.mount_native_feed"));
     assert!(js.contains("toggle-approval-mode-btn"));
     assert!(js.contains("stop-active-turn-btn"));
     assert!(js.contains("data-allow-turn"));

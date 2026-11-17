@@ -66,7 +66,6 @@ pub fn AccountsAdminWorkspace(state: AccountsAdminState) -> impl IntoView {
     let has_accounts = !accounts.is_empty();
     let cards = accounts
         .iter()
-        .cloned()
         .map(|acc| {
             let creds = if acc.credential_files.is_empty() {
                 "Not authenticated yet".to_string()
