@@ -425,7 +425,7 @@ async fn bootstrap_admin(
         ));
     }
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&mut *tx)
         .await?;
@@ -990,7 +990,7 @@ async fn create_invite(
     admin: AdminUser,
     Json(req): Json<CreateInviteRequest>,
 ) -> Result<(StatusCode, Json<InviteDto>), AppError> {
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
 
     for pid in &req.project_ids {
         let exists: Option<String> = sqlx::query_scalar("SELECT id FROM projects WHERE id = ?")
@@ -1110,7 +1110,7 @@ async fn redeem_invite(
         ));
     }
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let row = sqlx::query(
         "SELECT id, role, used_by, expires_at FROM user_invites WHERE code = ?",
     )

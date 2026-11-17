@@ -460,7 +460,7 @@ impl ExecutionScheduler {
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
-        let mut tx = self.db.begin().await?;
+        let mut tx = self.db.begin_with("BEGIN IMMEDIATE").await?;
 
         sqlx::query(
             "INSERT INTO chat_turns (id, session_id, project_id, user_id, provider, account_id, prompt, status, events_json, created_at)

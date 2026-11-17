@@ -83,7 +83,7 @@ pub(crate) async fn create(
     )
     .await?;
     let context = serde_json::to_string(&entries).map_err(serialization_error)?;
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let id = insert_gateway_session(
         &mut tx,
         project_id,

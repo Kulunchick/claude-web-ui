@@ -903,7 +903,7 @@ async fn update_member_account_acl(
     ensure_project_and_user_exist(&state.db, &project_id, &user_id).await?;
 
     let now = Utc::now().to_rfc3339();
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
 
     match req.allowed_accounts {
         None => {

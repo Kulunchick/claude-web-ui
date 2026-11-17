@@ -339,7 +339,7 @@ async fn admit(
     next: Option<i64>,
 ) -> Result<String, AppError> {
     let run_id = Uuid::new_v4().to_string();
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     if let Some(next) = next {
         sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
             .bind(next)
