@@ -1287,17 +1287,20 @@ async fn delete_project_skill_companion(
 // MCP Server Manager, Presets, Cross-CLI Sync & Graphify Indexing
 // ============================================================================
 
+const GRAPHIFY_PRESET_ID: &str = "graphify-mcp";
+const GRAPHIFY_GRAPH_PATH: &str = "graphify-out/graph.json";
+
 fn built_in_mcp_presets() -> Vec<McpPresetDto> {
     vec![
         McpPresetDto {
-            id: "graphify-mcp".to_string(),
+            id: GRAPHIFY_PRESET_ID.to_string(),
             display_name: "Graphify Knowledge Graph (graphify-mcp)".to_string(),
             description: "Expose graphify-out/graph.json knowledge graph as an MCP server."
                 .to_string(),
             server: McpServerDto {
                 name: "graphify".to_string(),
                 command: Some("graphify-mcp".to_string()),
-                args: vec!["--graph".to_string(), "graphify-out/graph.json".to_string()],
+                args: vec![GRAPHIFY_GRAPH_PATH.to_string()],
                 env: BTreeMap::new(),
                 url: None,
                 disabled: false,
@@ -1941,13 +1944,19 @@ async fn apply_project_mcp_preset(
     Extension(ctx): Extension<ProjectContext>,
     Path((_project_id, provider, preset_id)): Path<(String, CliProvider, String)>,
 ) -> Result<Json<ProviderMcpConfigDto>, AppError> {
-    let preset = built_in_mcp_presets()
+    let mut preset = built_in_mcp_presets()
         .into_iter()
         .find(|p| p.id == preset_id)
         .ok_or_else(|| AppError::not_found("mcp preset not found"))?;
+    let workspace = StdPath::new(&ctx.project.workspace_path);
+    if preset_id == GRAPHIFY_PRESET_ID {
+        let graph_path = std::path::absolute(workspace.join(GRAPHIFY_GRAPH_PATH))
+            .map_err(|e| AppError::internal(format!("resolve Graphify graph path: {e}")))?;
+        preset.server.args = vec![graph_path.to_string_lossy().into_owned()];
+    }
     let cfg = upsert_mcp_server_in_config(
         &state.config.data_dir,
-        Some(StdPath::new(&ctx.project.workspace_path)),
+        Some(workspace),
         provider,
         ConfigScope::Project,
         preset.server,
@@ -1985,9 +1994,9 @@ async fn run_project_graphify_index(
         provider,
         program: "graphify".to_string(),
         args: vec![
+            "extract".to_string(),
             ".".to_string(),
-            "--output".to_string(),
-            "graphify-out/graph.json".to_string(),
+            "--code-only".to_string(),
         ],
         working_dir: PathBuf::from(&ctx.project.workspace_path),
         env: BTreeMap::new(),
@@ -2032,13 +2041,13 @@ async fn run_project_graphify_index(
         "run_graphify_index",
         Some("project"),
         Some(&ctx.project.id),
-        Some("graphify-out/graph.json"),
+        Some(GRAPHIFY_GRAPH_PATH),
     )
     .await?;
 
     Ok(Json(GraphifyIndexResponse {
         project_id: ctx.project.id,
-        graph_path: "graphify-out/graph.json".to_string(),
+        graph_path: GRAPHIFY_GRAPH_PATH.to_string(),
         status,
         output,
     }))

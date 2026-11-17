@@ -683,7 +683,8 @@ async fn mcp_manager_native_formats_presets_cross_cli_sync_graphify_index_and_rb
         .await;
     assert_eq!(status, StatusCode::OK);
     let presets: Vec<McpPresetDto> = TestHarness::decode(body).await;
-    assert!(presets.iter().any(|p| p.id == "graphify-mcp"));
+    let graphify_preset = presets.iter().find(|p| p.id == "graphify-mcp").unwrap();
+    assert_eq!(graphify_preset.server.args, ["graphify-out/graph.json"]);
     assert!(presets.iter().any(|p| p.id == "chrome-devtools"));
     assert!(presets.iter().any(|p| p.id == "playwright"));
 
@@ -718,7 +719,7 @@ async fn mcp_manager_native_formats_presets_cross_cli_sync_graphify_index_and_rb
     );
     assert_eq!(
         claude_cfg.servers[0].args,
-        vec!["--graph", "graphify-out/graph.json"]
+        [alpha_ws.join("graphify-out").join("graph.json").to_string_lossy()]
     );
 
     let raw_mcp_json: Value =
@@ -891,10 +892,7 @@ async fn mcp_manager_native_formats_presets_cross_cli_sync_graphify_index_and_rb
         invocations[0].working_dir,
         PathBuf::from(&alpha.workspace_path)
     );
-    assert!(invocations[0]
-        .args
-        .iter()
-        .any(|a| a.contains("graphify-out/graph.json")));
+    assert_eq!(invocations[0].args, ["extract", ".", "--code-only"]);
 }
 
 #[tokio::test]
