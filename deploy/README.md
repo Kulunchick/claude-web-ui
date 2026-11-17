@@ -20,9 +20,8 @@ turns that are running at that moment.
 | `/etc/claude-web-ui.env` | Environment for the service |
 | `/var/lib/claude-web-ui` | Data directory: SQLite database, JWT secret, CLI profiles |
 
-The service runs as the `claude-web` user. Install the CLIs the Gateway should
-drive (`claude`, `codex`, `agy`) so that user can run them, and keep project
-workspaces readable and writable by it.
+The service runs as the `claude-web` user. Keep project workspaces readable and
+writable by it.
 
 ## Install
 
@@ -35,6 +34,7 @@ install -m 0755 deploy/update.sh /opt/claude-web-ui/update.sh
 install -m 0644 deploy/claude-web-ui.service deploy/claude-web-ui-update.service \
   deploy/claude-web-ui-update.timer /etc/systemd/system/
 cat > /etc/claude-web-ui.env <<'EOF'
+PATH=/var/lib/claude-web-ui/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CLAUDE_WEB_UI_BIND=127.0.0.1:8090
 CLAUDE_WEB_UI_DATA_DIR=/var/lib/claude-web-ui/data
 CLAUDE_WEB_UI_HEALTH_URL=http://127.0.0.1:8090/api/auth/status
@@ -52,6 +52,36 @@ systemctl start claude-web-ui-update.service
 The updater unit reads the same environment file, so `CLAUDE_WEB_UI_HEALTH_URL`
 must match `CLAUDE_WEB_UI_BIND`.
 
+## CLIs
+
+The Gateway runs `claude`, `codex`, and `agy` from `PATH`. Install them for the
+service user with the official installers, which place them in
+`~/.local/bin` (already first on the service `PATH` above) and update
+themselves:
+
+```sh
+cd /tmp
+curl -fsSL -o claude.sh https://claude.ai/install.sh
+curl -fsSL -o codex.sh https://chatgpt.com/codex/install.sh
+curl -fsSL -o agy.sh https://antigravity.google/cli/install.sh
+for cli in claude codex agy; do
+  runuser -u claude-web -- env HOME=/var/lib/claude-web-ui bash -c "cd ~ && bash /tmp/$cli.sh"
+done
+```
+
+Sign the CLI accounts in from **Admin: CLI Accounts** in the dashboard.
+
+## First administrator
+
+The first person to open an uninitialized Gateway creates the administrator.
+Create it before the site is public, over an SSH tunnel:
+
+```sh
+ssh -L 8090:127.0.0.1:8090 root@<server>
+```
+
+Then open http://localhost:8090.
+
 ## HTTPS
 
 Point a DNS record at the server and add a Caddy site for it:
@@ -59,8 +89,17 @@ Point a DNS record at the server and add a Caddy site for it:
 ```caddyfile
 cwu.example.com {
 	encode zstd gzip
+
+	# The first administrator is created over the SSH tunnel only.
+	@bootstrap path /api/auth/bootstrap
+	respond @bootstrap 403
+
 	reverse_proxy 127.0.0.1:8090 {
 		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
 	}
 }
 ```
