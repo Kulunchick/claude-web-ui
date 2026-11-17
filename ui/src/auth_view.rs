@@ -11,6 +11,7 @@ pub enum AuthScreen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DashboardTab {
     ProjectOverview,
+    AgentsSkillsMcp,
     AdminUsersProjects,
     AdminAccounts,
 }
@@ -218,6 +219,16 @@ pub fn ProjectSwitcherSidebar(
                         }
                     />
                 </ul>
+            </div>
+            <div class="sidebar-section">
+                <h3>"Workspace"</h3>
+                <button
+                    class="nav-item"
+                    class:active=move || active_tab.get() == DashboardTab::AgentsSkillsMcp
+                    on:click=move |_| active_tab.set(DashboardTab::AgentsSkillsMcp)
+                >
+                    "Agents, Skills & MCP"
+                </button>
             </div>
             <Show when=move || is_admin>
                 <div class="sidebar-section">
