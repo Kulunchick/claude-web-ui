@@ -664,3 +664,21 @@ textarea {
 .kanban-form { display: grid; max-width: 36rem; gap: .7rem; }
 .kanban-form label { display: grid; gap: .25rem; }
 .kanban-form label:has(input[type=checkbox]) { display: flex; align-items: center; }
+
+
+.cron-panel + .cron-panel {
+  margin-top: 1rem;
+}
+
+.cron-panel .kanban-card {
+  margin-top: .75rem;
+  overflow-wrap: anywhere;
+}
+
+.cron-panel .kanban-card button + button {
+  margin-left: .5rem;
+}
+
+.cron-run-summary {
+  white-space: pre-wrap;
+}

@@ -1231,3 +1231,20 @@ pub async fn resolve_project_cli_env(
 
     Ok((provider, None, BTreeMap::new()))
 }
+
+
+pub(crate) async fn cron_account_env(
+    db: &SqlitePool,
+    provider: CliProvider,
+    account_id: &str,
+) -> Result<BTreeMap<String, String>, AppError> {
+    let profile: Option<String> = sqlx::query_scalar(
+        "SELECT profile_dir FROM cli_accounts WHERE id = ? AND provider = ?",
+    )
+    .bind(account_id)
+    .bind(provider.as_str())
+    .fetch_optional(db)
+    .await?;
+    let profile = profile.ok_or_else(|| AppError::bad_request("CLI account does not belong to this provider"))?;
+    Ok(account_env_vars(provider, StdPath::new(&profile)))
+}

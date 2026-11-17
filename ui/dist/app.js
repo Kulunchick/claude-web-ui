@@ -86,6 +86,7 @@
       if (!leptos) return;
       if (state.user) {
         connectChatStream(state.activeProjectId);
+        if (state.projectTab === "cron") render();
       } else {
         boot();
       }
@@ -458,6 +459,15 @@
       state.screen = screen;
       render();
     });
+  });
+
+  window.addEventListener("cwu:open-cron-session", async ({ detail: sessionId }) => {
+    if (!state.user || state.projectTab !== "cron") return;
+    state.activeSessionId = sessionId;
+    state.sessionSearch = "";
+    state.projectTab = "chat";
+    await loadProjectSessions();
+    render();
   });
 
   let changingProject = false;
@@ -1053,8 +1063,9 @@
           <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
           <button class="btn-secondary ${state.projectTab === "files" ? "active" : ""}" id="proj-tab-files" type="button">Files &amp; Git</button>
           <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
+          <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
         </div>
-        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? renderKanban(readOnly) : renderProjectWorkspace(activeProject)}
+        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? renderKanban(readOnly) : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
       `;
     }
 
@@ -1093,6 +1104,8 @@
     `;
 
     leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
+    const cron = document.getElementById("cron-workspace");
+    if (cron) leptos.mount_cron(cron, state.activeProjectId, state.accessToken || "");
     bindDashboardHandlers();
   }
 
@@ -1568,6 +1581,9 @@
     bindKanbanHandlers();
     const projTabChat = document.getElementById("proj-tab-chat");
     if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
+
+    const projTabCron = document.getElementById("proj-tab-cron");
+    if (projTabCron) projTabCron.onclick = () => { state.projectTab = "cron"; render(); };
 
     const projTabFiles = document.getElementById("proj-tab-files");
     if (projTabFiles) projTabFiles.onclick = () => { state.projectTab = "files"; render(); };

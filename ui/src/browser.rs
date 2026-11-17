@@ -12,12 +12,12 @@ use wasm_bindgen::prelude::*;
 
 thread_local! {
     // The dashboard owns the host element and replaces it when changing views.
-    static MOUNT: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::new(None);
+    static MOUNTS: RefCell<Vec<Box<dyn std::any::Any>>> = RefCell::new(Vec::new());
 }
 
 #[wasm_bindgen]
 pub fn unmount_gateway_view() {
-    MOUNT.with(|mount| mount.borrow_mut().take());
+    MOUNTS.with(|mounts| mounts.borrow_mut().clear());
 }
 
 #[wasm_bindgen]
@@ -44,7 +44,7 @@ pub fn mount_auth(parent: HtmlElement, screen: String, error: Option<String>, in
             </main>
         }
     });
-    MOUNT.with(|mount| mount.replace(Some(Box::new(handle))));
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
 }
 
 fn switch_auth_screen(screen: &'static str) {
@@ -120,6 +120,20 @@ pub fn mount_project_list(
             />
         }
     });
-    MOUNT.with(|mount| mount.replace(Some(Box::new(handle))));
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
     Ok(())
+}
+
+#[wasm_bindgen]
+pub fn mount_cron(parent: HtmlElement, project_id: String, access_token: String) {
+    let handle = mount_to(parent, move || {
+        view! {
+            <crate::cron_view::CronView
+                project_id=project_id
+                access_token=access_token
+                open_session=Callback::new(|id: String| emit("cwu:open-cron-session", &id))
+            />
+        }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
 }

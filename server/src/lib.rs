@@ -70,6 +70,7 @@ pub struct AppState {
     pub cli_runner: Arc<dyn CliRunner>,
     pub messenger: Arc<dyn MessengerTransport>,
     pub scheduler: Arc<chat::ExecutionScheduler>,
+    pub(crate) cron_admission: Arc<tokio::sync::Mutex<()>>,
     pub(crate) messenger_callbacks: Arc<messenger::Callbacks>,
     pub kanban_events: tokio::sync::broadcast::Sender<claude_web_ui_shared::kanban::KanbanCardDto>,
 }
@@ -79,6 +80,7 @@ pub struct GatewayServer {
     state: AppState,
     _kanban_worker: Arc<KanbanWorkerHandle>,
     _messenger_worker: Arc<KanbanWorkerHandle>,
+    _cron_worker: Arc<tokio::sync::oneshot::Sender<()>>,
 }
 
 struct KanbanWorkerHandle(tokio::task::JoinHandle<()>);
@@ -114,15 +116,18 @@ impl GatewayServer {
             cli_runner,
             messenger,
             messenger_callbacks: Arc::default(),
+            cron_admission: Arc::default(),
             scheduler,
             kanban_events: tokio::sync::broadcast::channel(128).0,
         };
+        let cron_worker = cron::start(state.clone()).await?;
         let worker = kanban::start(state.clone());
         let messenger_worker = messenger::start_notifications(state.clone());
         Ok(Self {
             state,
             _kanban_worker: Arc::new(KanbanWorkerHandle(worker)),
             _messenger_worker: Arc::new(KanbanWorkerHandle(messenger_worker)),
+            _cron_worker: Arc::new(cron_worker),
         })
     }
 
@@ -135,6 +140,7 @@ impl GatewayServer {
             .merge(workspace_files::router(self.state.clone()))
             .merge(chat::router(self.state.clone()))
             .merge(kanban::router(self.state.clone()))
+            .merge(cron::router(self.state.clone()))
             .merge(agents_skills_mcp::router(self.state.clone()))
             .fallback(serve_embedded_ui)
             .layer(CorsLayer::permissive())

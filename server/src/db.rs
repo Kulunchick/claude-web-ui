@@ -265,6 +265,42 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 REFERENCES user_messenger_links(platform, external_user_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS cron_jobs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            owner_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            config_json TEXT NOT NULL,
+            next_run_at INTEGER,
+            deleted INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cron_jobs_due
+            ON cron_jobs(next_run_at) WHERE deleted = 0 AND next_run_at IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS cron_runs (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES cron_jobs(id) ON DELETE CASCADE,
+            actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            notification_json TEXT,
+            notification_handled INTEGER NOT NULL DEFAULT 0,
+            notification_error TEXT,
+            scheduled INTEGER NOT NULL,
+            prompt TEXT NOT NULL,
+            turn_id TEXT REFERENCES chat_turns(id) ON DELETE SET NULL,
+            session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            queued_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            summary TEXT,
+            error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cron_runs_job
+            ON cron_runs(job_id, queued_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_cron_runs_pending
+            ON cron_runs(status) WHERE status IN ('queued', 'running', 'waiting_approval');
+
         CREATE TABLE IF NOT EXISTS kanban_dependencies (
             card_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
             blocker_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,

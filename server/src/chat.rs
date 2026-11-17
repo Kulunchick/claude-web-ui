@@ -262,12 +262,24 @@ struct SchedulerInner {
     cancelled_queued: HashSet<String>,
 }
 
+enum TurnOrigin<'a> {
+    Interactive,
+    Kanban(&'a str),
+    Messenger,
+    Cron {
+        run_id: &'a str,
+        provider: CliProvider,
+        account_id: Option<String>,
+    },
+}
+
 struct QueuedTurnJob {
     turn_id: String,
     session_id: String,
     project_id: String,
     prompt: String,
     authorize_actor: Option<String>,
+    cron_target: Option<(CliProvider, Option<String>)>,
 }
 
 #[derive(Clone)]
@@ -374,24 +386,40 @@ impl ExecutionScheduler {
         &self,
         params: EnqueueTurnParams,
     ) -> Result<SendChatTurnResponse, AppError> {
-        self.enqueue_project_turn(params, None, false).await
+        self.enqueue_project_turn(params, TurnOrigin::Interactive).await
     }
 
     pub(crate) async fn enqueue_kanban_turn(
         &self, params: EnqueueTurnParams, card_id: &str,
     ) -> Result<SendChatTurnResponse, AppError> {
-        self.enqueue_project_turn(params, Some(card_id), false).await
+        self.enqueue_project_turn(params, TurnOrigin::Kanban(card_id)).await
     }
 
     pub(crate) async fn enqueue_authorized_turn(
         &self,
         params: EnqueueTurnParams,
     ) -> Result<SendChatTurnResponse, AppError> {
-        self.enqueue_project_turn(params, None, true).await
+        self.enqueue_project_turn(params, TurnOrigin::Messenger).await
+    }
+
+    pub(crate) async fn enqueue_cron_turn(
+        &self,
+        params: EnqueueTurnParams,
+        run_id: &str,
+        provider: CliProvider,
+        account_id: Option<String>,
+    ) -> Result<SendChatTurnResponse, AppError> {
+        self.enqueue_project_turn(
+            params,
+            TurnOrigin::Cron { run_id, provider, account_id },
+        )
+        .await
     }
 
     async fn enqueue_project_turn(
-        &self, params: EnqueueTurnParams, card_id: Option<&str>, authorize_actor: bool,
+        &self,
+        params: EnqueueTurnParams,
+        origin: TurnOrigin<'_>,
     ) -> Result<SendChatTurnResponse, AppError> {
         let prompt = params.prompt.trim().to_string();
         if prompt.is_empty() {
@@ -399,7 +427,12 @@ impl ExecutionScheduler {
         }
 
         let session = load_chat_session(&self.db, &params.project_id, &params.session_id).await?;
-        let (provider, account_id) = if authorize_actor {
+        let (provider, account_id) = if let TurnOrigin::Cron { provider, account_id, .. } = &origin {
+            if session.provider != *provider {
+                return Err(AppError::bad_request("cron provider does not match the session"));
+            }
+            (*provider, account_id.clone())
+        } else if matches!(origin, TurnOrigin::Messenger) {
             let (provider, account_id, _) = self.session_cli(&session).await?;
             crate::accounts::authorize_turn_account(
                 &self.db,
@@ -447,9 +480,13 @@ impl ExecutionScheduler {
             .execute(&mut *tx)
             .await?;
 
-        if let Some(card_id) = card_id {
+        if let TurnOrigin::Kanban(card_id) = &origin {
             sqlx::query("UPDATE kanban_cards SET turn_id = ?, assigned_cli = ? WHERE id = ?")
                 .bind(&turn_id).bind(provider.as_str()).bind(card_id).execute(&mut *tx).await?;
+        }
+        if let TurnOrigin::Cron { run_id, .. } = &origin {
+            sqlx::query("UPDATE cron_runs SET turn_id = ?, session_id = ? WHERE id = ?")
+                .bind(&turn_id).bind(&params.session_id).bind(run_id).execute(&mut *tx).await?;
         }
         tx.commit().await?;
 
@@ -465,7 +502,12 @@ impl ExecutionScheduler {
             session_id: params.session_id.clone(),
             project_id: params.project_id.clone(),
             prompt,
-            authorize_actor: authorize_actor.then_some(params.user_id),
+            authorize_actor: matches!(origin, TurnOrigin::Messenger | TurnOrigin::Cron { .. })
+                .then_some(params.user_id),
+            cron_target: match origin {
+                TurnOrigin::Cron { provider, account_id, .. } => Some((provider, account_id)),
+                _ => None,
+            },
         });
 
         let turn = load_chat_turn(&self.db, &params.project_id, &turn_id).await?;
@@ -645,7 +687,13 @@ impl ExecutionScheduler {
             if should_skip {
                 continue;
             }
+            let cron_turn_id = job.cron_target.as_ref().map(|_| job.turn_id.clone());
             if let Err(err) = self.execute_single_turn(job).await {
+                if let Some(turn_id) = cron_turn_id {
+                    let _ = sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ? AND completed_at IS NULL")
+                        .bind(&err.message).bind(Utc::now().to_rfc3339()).bind(turn_id)
+                        .execute(&self.db).await;
+                }
                 tracing::error!("execution scheduler turn failure: {:?}", err);
             }
         }
@@ -677,7 +725,19 @@ impl ExecutionScheduler {
                 .fetch_one(&self.db)
                 .await?;
 
-        let (effective_provider, account_id, env) = self.session_cli(&session).await?;
+        let (effective_provider, account_id, env) =
+            if let Some((provider, account_id)) = &job.cron_target {
+                if session.provider != *provider {
+                    return Err(AppError::bad_request("cron provider does not match the session"));
+                }
+                let env = match account_id {
+                    Some(id) => crate::accounts::cron_account_env(&self.db, *provider, id).await?,
+                    None => BTreeMap::new(),
+                };
+                (*provider, account_id.clone(), env)
+            } else {
+                self.session_cli(&session).await?
+            };
         if let Some(user_id) = &job.authorize_actor {
             if let Err(error) = crate::accounts::authorize_turn_account(
                 &self.db, &job.project_id, user_id, account_id.as_deref(),
@@ -1043,7 +1103,7 @@ impl ExecutionScheduler {
     }
 }
 
-async fn resolve_provider_account_env(
+pub(crate) async fn resolve_provider_account_env(
     db: &SqlitePool,
     project_id: &str,
     provider: CliProvider,

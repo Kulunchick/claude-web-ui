@@ -4,7 +4,7 @@ The Gateway serves the files in `ui/dist` from its Rust binary. The Tauri
 dashboard window loads the selected Gateway's copy of the same frontend.
 
 The Leptos CSR views in `ui/src/browser.rs` mount the sign-in, first administrator,
-invite redemption, and project selection UI. The dashboard uses the existing
+invite redemption, project selection, and Cron workspace. The dashboard uses the existing
 JavaScript workspace views for chat, terminal, file and Git browsing, Kanban,
 and administration.
 
