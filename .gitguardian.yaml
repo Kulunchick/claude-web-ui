@@ -1,0 +1,7 @@
+version: 2
+
+secret:
+  # Integration tests create throwaway users in temporary databases; their
+  # usernames and passwords are fixtures, not credentials.
+  ignored_paths:
+    - "server/tests/**"

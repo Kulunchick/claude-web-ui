@@ -1,0 +1,1587 @@
+(() => {
+  const desktop = Object.hasOwn(window, "__CWU_DESKTOP_ACCESS_TOKEN");
+
+  const state = {
+    initialized: true,
+    screen: "login",
+    accessToken: desktop ? window.__CWU_DESKTOP_ACCESS_TOKEN : localStorage.getItem("cwu_access_token"),
+    refreshToken: desktop ? null : localStorage.getItem("cwu_refresh_token"),
+    user: null,
+    projects: [],
+    activeProjectId: null,
+    projectCli: null,
+    tab: "overview",
+    adminUsers: [],
+    adminInvites: [],
+    adminAccounts: [],
+    aclProjectId: null,
+    aclMembers: [],
+    aclList: [],
+    addAccountModal: null,
+    asmScope: "project",
+    asmProvider: "claude_code",
+    asmSubTab: "agents",
+    asmRawMode: false,
+    asmAgents: [],
+    asmSkills: [],
+    asmMcpConfig: null,
+    asmPresets: [],
+    asmSelectedAgent: null,
+    asmSelectedSkill: null,
+    asmGraphifyResult: null,
+    ptySocket: null,
+    ptyTerminal: null,
+    projectTab: "chat",
+    chatSocket: null,
+    nativeTranscriptSocket: null,
+    nativeTranscriptSessionId: null,
+    sessions: [],
+    activeSessionId: null,
+    activeSessionDetail: null,
+    sessionSearch: "",
+    showProjectTerminal: false,
+    terminalMode: "shell",
+    schedulerStatus: null,
+    respectGitignore: true,
+    fileTree: [],
+    collapsedDirs: {},
+    activeFile: null,
+    editorText: "",
+    editorDirty: false,
+    gitStatus: null,
+    gitDiff: null,
+    diffMode: "unified",
+    diffPath: null,
+    diffStaged: false,
+    error: null,
+    notice: null,
+    messengerPairing: null,
+  };
+
+  const app = document.getElementById("app");
+  let leptos;
+
+  if (desktop) {
+    window.addEventListener("cwu:desktop-token", () => {
+      state.accessToken = window.__CWU_DESKTOP_ACCESS_TOKEN;
+      if (!leptos) return;
+      if (state.user) {
+        connectChatStream(state.activeProjectId);
+        if (state.projectTab === "cron") render();
+      } else {
+        boot();
+      }
+    });
+  }
+
+  async function api(path, options = {}) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if (state.accessToken) {
+      headers["Authorization"] = `Bearer ${state.accessToken}`;
+    }
+    const res = await fetch(path, { ...options, headers });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) {
+      const msg = data && data.error ? data.error : `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  function closeActivePty() {
+    if (state.ptySocket) {
+      try { state.ptySocket.close(); } catch {}
+      state.ptySocket = null;
+    }
+    if (state.ptyTerminal) {
+      try { state.ptyTerminal.dispose(); } catch {}
+      state.ptyTerminal = null;
+    }
+  }
+
+  function closeChatSocket() {
+    closeNativeTranscript();
+    if (state.chatSocket) {
+      try { state.chatSocket.close(); } catch {}
+      state.chatSocket = null;
+    }
+  }
+
+  function saveTokens(auth) {
+    state.accessToken = auth.access_token;
+    state.refreshToken = auth.refresh_token;
+    state.user = auth.user;
+    if (!desktop) {
+      localStorage.setItem("cwu_access_token", auth.access_token);
+      localStorage.setItem("cwu_refresh_token", auth.refresh_token);
+    }
+  }
+
+  function clearSession() {
+    closeActivePty();
+    closeChatSocket();
+    state.accessToken = null;
+    state.refreshToken = null;
+    state.user = null;
+    state.messengerPairing = null;
+    state.projects = [];
+    state.projectCli = null;
+    state.adminAccounts = [];
+    state.addAccountModal = null;
+    state.sessions = [];
+    state.activeSessionId = null;
+    state.activeSessionDetail = null;
+    state.nativeTranscriptSessionId = null;
+    state.showProjectTerminal = false;
+    localStorage.removeItem("cwu_access_token");
+    localStorage.removeItem("cwu_refresh_token");
+  }
+
+  async function boot() {
+    try {
+      const status = await api("/api/auth/status");
+      state.initialized = status.initialized;
+      if (!status.initialized) {
+        clearSession();
+        state.screen = "bootstrap";
+        render();
+        return;
+      }
+      if (state.accessToken) {
+        try {
+          await loadAuthenticatedData();
+          return;
+        } catch {
+          clearSession();
+        }
+      }
+      const params = new URLSearchParams(window.location.search);
+      state.screen = params.get("invite") ? "invite" : "login";
+    } catch (err) {
+      state.error = err.message;
+    }
+    render();
+  }
+
+  async function loadProjectCli() {
+    if (!state.activeProjectId) {
+      state.projectCli = null;
+      state.sessions = [];
+      state.activeSessionId = null;
+      state.activeSessionDetail = null;
+      return;
+    }
+    try {
+      state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`);
+    } catch {
+      state.projectCli = null;
+    }
+    await loadProjectSessions();
+  }
+
+  async function loadProjectSessions() {
+    if (!state.activeProjectId) {
+      state.sessions = [];
+      state.activeSessionDetail = null;
+      closeNativeTranscript();
+      return;
+    }
+    try {
+      const q = state.sessionSearch ? `?q=${encodeURIComponent(state.sessionSearch)}` : "";
+      state.sessions = await api(`/api/projects/${state.activeProjectId}/sessions${q}`);
+      if (state.activeSessionId && !state.sessions.some((s) => s.id === state.activeSessionId)) {
+        state.activeSessionId = state.sessions.length > 0 ? state.sessions[0].id : null;
+      } else if (!state.activeSessionId && state.sessions.length > 0) {
+        state.activeSessionId = state.sessions[0].id;
+      }
+      if (state.activeSessionId) {
+        state.activeSessionDetail = await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}`);
+      } else {
+        state.activeSessionDetail = null;
+      }
+      state.schedulerStatus = await api(`/api/projects/${state.activeProjectId}/scheduler`);
+    } catch {
+      state.sessions = [];
+      state.activeSessionDetail = null;
+    } finally {
+      connectNativeTranscript();
+    }
+  }
+
+  function connectChatStream(projectId) {
+    closeChatSocket();
+    if (!projectId || !state.accessToken) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${proto}//${window.location.host}/api/projects/${encodeURIComponent(projectId)}/chat/ws?token=${encodeURIComponent(state.accessToken)}`;
+    const ws = new WebSocket(wsUrl);
+    state.chatSocket = ws;
+    connectNativeTranscript();
+    ws.onmessage = async (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "scheduler_status") {
+          state.schedulerStatus = msg.status;
+          return;
+        }
+        if (msg.session_id === state.activeSessionId) {
+          await loadProjectSessions();
+          if (state.projectTab === "chat") render();
+        }
+      } catch {}
+    };
+  }
+
+
+  function closeNativeTranscript() {
+    const current = state.nativeTranscriptSocket;
+    state.nativeTranscriptSocket = null;
+    if (current) current.socket.close();
+  }
+
+  function displaysNativeTranscript(detail) {
+    return Boolean(detail?.session.transcript_path) && (!detail.turns?.length
+      || state.nativeTranscriptSessionId === detail.session.id);
+  }
+
+  function connectNativeTranscript() {
+    const detail = state.activeSessionDetail;
+    const projectId = state.activeProjectId;
+    const sessionId = state.activeSessionId;
+    const current = state.nativeTranscriptSocket;
+    if (!displaysNativeTranscript(detail) || !projectId || !sessionId || !state.accessToken) {
+      closeNativeTranscript();
+      return;
+    }
+    if (current?.projectId === projectId && current.sessionId === sessionId) return;
+    closeNativeTranscript();
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const sessionPath = `/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`;
+    const socket = new WebSocket(`${proto}//${window.location.host}${sessionPath}/transcript/ws?token=${encodeURIComponent(state.accessToken)}`);
+    const connection = { projectId, sessionId, socket };
+    state.nativeTranscriptSocket = connection;
+    const isCurrent = () => state.nativeTranscriptSocket === connection
+      && state.activeProjectId === projectId && state.activeSessionId === sessionId;
+    let refreshPending = false;
+    let refreshing = false;
+
+    socket.onclose = () => {
+      if (state.nativeTranscriptSocket === connection) state.nativeTranscriptSocket = null;
+    };
+    socket.onmessage = async (message) => {
+      const update = JSON.parse(message.data);
+      if (!isCurrent() || update.session_id !== sessionId) return;
+      if (update.type !== "native_transcript_ready" && update.type !== "native_transcript_appended") return;
+      // Refresh the canonical native snapshot so records already loaded over HTTP are not appended twice.
+      refreshPending = true;
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        while (refreshPending && isCurrent()) {
+          refreshPending = false;
+          const latest = await api(sessionPath);
+          if (!isCurrent() || !displaysNativeTranscript(latest) || !displaysNativeTranscript(state.activeSessionDetail)) return;
+          state.activeSessionDetail = latest;
+          const feed = state.tab === "overview" && state.projectTab === "chat" && app.querySelector(".chat-feed");
+          if (feed) {
+            leptos.mount_native_feed(feed, JSON.stringify(latest.native_messages || []));
+          }
+        }
+      } catch {
+        // Ordinary session refresh remains available if the native file disappears.
+      } finally {
+        refreshing = false;
+      }
+    };
+  }
+
+  async function loadAclProjectData(projectId) {
+    if (!projectId || state.user?.role !== "admin") {
+      state.aclMembers = [];
+      state.aclList = [];
+      return;
+    }
+    state.aclMembers = await api(`/api/admin/projects/${projectId}/members`);
+    state.aclList = await api(`/api/admin/projects/${projectId}/account-acls`);
+  }
+
+  async function loadAuthenticatedData() {
+    const me = await api("/api/auth/me");
+    state.user = me.user;
+    state.projects = me.projects || [];
+    if (!state.activeProjectId && state.projects.length > 0) {
+      state.activeProjectId = state.projects[0].id;
+    }
+    await loadProjectCli();
+    try {
+      state.asmPresets = await api("/api/mcp/presets");
+    } catch {
+      state.asmPresets = [];
+    }
+    if (state.tab === "agents_skills_mcp") {
+      await loadAsmData();
+    }
+    if (state.user.role === "admin") {
+      state.adminUsers = await api("/api/admin/users");
+      state.adminInvites = await api("/api/admin/invites");
+      state.adminAccounts = await api("/api/admin/accounts");
+      if (!state.aclProjectId && state.projects.length > 0) {
+        state.aclProjectId = state.projects[0].id;
+      }
+      if (state.aclProjectId) {
+        await loadAclProjectData(state.aclProjectId);
+      }
+    }
+    if (state.activeProjectId) {
+      connectChatStream(state.activeProjectId);
+      await loadProjectWorkspace();
+    }
+    render();
+  }
+
+  async function loadProjectWorkspace() {
+    if (!state.activeProjectId) return;
+    const pid = encodeURIComponent(state.activeProjectId);
+    try {
+      const [tree, gitStatus] = await Promise.all([
+        api(`/api/projects/${pid}/files/tree?respect_gitignore=${state.respectGitignore}`),
+        api(`/api/projects/${pid}/git/status`),
+      ]);
+      state.fileTree = tree.entries || [];
+      state.gitStatus = gitStatus;
+      if (gitStatus.is_git_repo) {
+        await loadGitDiff(state.diffPath, state.diffStaged, false);
+      } else {
+        state.gitDiff = null;
+      }
+    } catch (err) {
+      state.error = err.message;
+    }
+  }
+
+  async function openWorkspaceFile(path) {
+    if (!state.activeProjectId) return;
+    const pid = encodeURIComponent(state.activeProjectId);
+    state.error = null;
+    state.notice = null;
+    try {
+      const file = await api(`/api/projects/${pid}/files/content?path=${encodeURIComponent(path)}`);
+      state.activeFile = file;
+      state.editorText = file.content || "";
+      state.editorDirty = false;
+      render();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  }
+
+  async function saveWorkspaceFile() {
+    if (!state.activeProjectId || !state.activeFile) return;
+    const pid = encodeURIComponent(state.activeProjectId);
+    state.error = null;
+    state.notice = null;
+    try {
+      await api(`/api/projects/${pid}/files/content`, {
+        method: "PUT",
+        body: JSON.stringify({ path: state.activeFile.path, content: state.editorText }),
+      });
+      state.editorDirty = false;
+      state.notice = `Saved ${state.activeFile.path}`;
+      await loadProjectWorkspace();
+      render();
+    } catch (err) {
+      state.error = err.message;
+      render();
+    }
+  }
+
+  async function loadGitDiff(path = null, staged = false, shouldRender = true) {
+    if (!state.activeProjectId) return;
+    const pid = encodeURIComponent(state.activeProjectId);
+    state.diffPath = path;
+    state.diffStaged = staged;
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    params.set("staged", staged ? "true" : "false");
+    params.set("mode", state.diffMode);
+    try {
+      state.gitDiff = await api(`/api/projects/${pid}/git/diff?${params.toString()}`);
+      if (shouldRender) render();
+    } catch (err) {
+      state.error = err.message;
+      if (shouldRender) render();
+    }
+  }
+
+  function esc(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function linkifyUrls(text) {
+    return esc(text).replace(
+      /(https?:\/\/[^\s<>"']+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+  }
+
+  function render() {
+    leptos.unmount_gateway_view();
+    if (!state.user) {
+      renderAuth();
+    } else {
+      renderDashboard();
+    }
+  }
+
+  window.addEventListener("cwu:auth-screen", ({ detail: screen }) => {
+    queueMicrotask(() => {
+      if (state.user || app.querySelector(".auth-card button[type='submit']:disabled")) return;
+      state.error = null;
+      state.screen = screen;
+      render();
+    });
+  });
+
+  window.addEventListener("cwu:switch-project-cli", async ({ detail }) => {
+    const projectId = state.activeProjectId;
+    if (!state.user || !projectId || !state.projectCli?.can_switch) return;
+    state.error = null;
+    state.notice = null;
+    try {
+      const projectCli = await api(`/api/projects/${encodeURIComponent(projectId)}/cli`, { method: "PUT", body: detail });
+      if (state.activeProjectId !== projectId) return;
+      state.projectCli = projectCli;
+    } catch (error) {
+      if (state.activeProjectId !== projectId) return;
+      state.error = error.message;
+    }
+    render();
+  });
+
+  async function openProjectSession(sessionId, source) {
+    if (!state.user || state.projectTab !== source) return;
+    state.activeSessionId = sessionId;
+    state.sessionSearch = "";
+    state.projectTab = "chat";
+    await loadProjectSessions();
+    render();
+  }
+
+  window.addEventListener("cwu:open-cron-session", ({ detail }) => openProjectSession(detail, "cron"));
+  window.addEventListener("cwu:open-kanban-session", ({ detail }) => openProjectSession(detail, "kanban"));
+
+  let changingProject = false;
+  window.addEventListener("cwu:select-project", async ({ detail: projectId }) => {
+    if (!state.user || changingProject || !state.projects.some((proj) => proj.id === projectId)) return;
+    changingProject = true;
+    try {
+      state.activeProjectId = projectId;
+      state.projectTab = "chat";
+      state.activeSessionId = null;
+      state.tab = "overview";
+      state.activeFile = null;
+      state.editorText = "";
+      state.editorDirty = false;
+      state.diffPath = null;
+      await loadProjectCli();
+      connectChatStream(state.activeProjectId);
+      await loadProjectWorkspace();
+      render();
+    } finally {
+      changingProject = false;
+    }
+  });
+
+  app.addEventListener("submit", async (event) => {
+    const form = event.target;
+    if (state.user || !form.matches(".auth-card")) return;
+    event.preventDefault();
+    const submit = form.querySelector("button[type='submit']");
+    if (submit.disabled) return;
+    submit.disabled = true;
+    try {
+      const fields = JSON.stringify(Object.fromEntries(new FormData(form)));
+      const auth = JSON.parse(await leptos.submit_auth(state.screen, fields));
+      saveTokens(auth);
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = String(error.message || error);
+      render();
+    }
+  });
+
+  function renderAuth() {
+    const invite = new URLSearchParams(window.location.search).get("invite") || "";
+    app.replaceChildren();
+    leptos.mount_auth(app, state.screen, state.error, invite);
+  }
+
+  app.addEventListener("submit", async (event) => {
+    const form = event.target;
+    const project = form.id === "create-project-form";
+    if (state.user?.role !== "admin" || (!project && form.id !== "create-invite-form")) return;
+    event.preventDefault();
+    const fields = new FormData(form);
+    const button = form.querySelector("button[type='submit']");
+    if (button.disabled) return;
+    button.disabled = true;
+    state.error = null;
+    state.notice = null;
+    try {
+      if (project) {
+        const body = { name: fields.get("name"), workspace_path: fields.get("workspace_path") };
+        await api("/api/admin/projects", { method: "POST", body: JSON.stringify(body) });
+        state.notice = "Project registered.";
+      } else {
+        const body = { role: fields.get("role"), project_ids: fields.getAll("project_ids") };
+        const invite = await api("/api/admin/invites", { method: "POST", body: JSON.stringify(body) });
+        state.notice = `Created invite code: ${invite.code}`;
+      }
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  app.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-revoke-uid]");
+    if (!button || button.disabled || state.user?.role !== "admin") return;
+    button.disabled = true;
+    state.error = null;
+    state.notice = null;
+    try {
+      await api(`/api/admin/users/${encodeURIComponent(button.dataset.revokeUid)}/revoke-sessions`, { method: "POST" });
+      state.notice = "User sessions revoked.";
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  function renderDashboard() {
+    closeActivePty();
+    const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
+    const isAdmin = state.user.role === "admin";
+    const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
+    const okHtml = state.notice ? `<div class="alert-success">${esc(state.notice)}</div>` : "";
+
+    let mainHtml = "";
+    if (state.tab === "admin" && isAdmin) {
+      mainHtml = '<div id="admin-workspace"></div>';
+    } else if (state.tab === "accounts" && isAdmin) {
+      mainHtml = '<div id="accounts-workspace"></div>';
+    } else if (state.tab === "agents_skills_mcp") {
+      mainHtml = '<div id="asm-workspace"></div>';
+    } else if (!activeProject) {
+      mainHtml = `
+        <section class="panel-card">
+          <h2>No Project Selected</h2>
+          <p class="subtitle">Ask an Admin to assign you to a project workspace.</p>
+        </section>
+      `;
+    } else {
+      mainHtml = `
+        <div class="tab-bar" style="margin:0;">
+          <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
+          <button class="btn-secondary ${state.projectTab === "files" ? "active" : ""}" id="proj-tab-files" type="button">Files &amp; Git</button>
+          <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
+          <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
+        </div>
+        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>'}
+      `;
+    }
+
+    app.innerHTML = `
+      <div class="dashboard-shell">
+        <aside class="sidebar">
+          <div class="brand">
+            <h1>Claude Web UI</h1>
+            <span class="role-badge">${esc(state.user.role)}</span>
+          </div>
+          <div class="sidebar-section">
+            <h3>Projects</h3>
+            <div id="project-list"></div>
+          </div>
+          <div class="sidebar-section">
+            <h3>Workspace</h3>
+            <button class="nav-item ${state.tab === "agents_skills_mcp" ? "active" : ""}" id="nav-asm">Agents, Skills &amp; MCP</button>
+          </div>
+          ${isAdmin ? `
+            <div class="sidebar-section">
+              <button class="nav-item ${state.tab === "admin" ? "active" : ""}" id="nav-admin">Admin: Users &amp; Projects</button>
+              <button class="nav-item ${state.tab === "accounts" ? "active" : ""}" id="nav-accounts">Admin: CLI Accounts</button>
+            </div>` : ""}
+          <div class="sidebar-section">
+            <button class="btn-secondary" id="pair-messenger-btn">Pair Telegram or Discord</button>
+            <p class="subtitle" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
+            <button class="btn-secondary" id="logout-btn">Sign Out (${esc(state.user.username)})</button>
+          </div>
+        </aside>
+        <main class="dashboard-main">
+          <div id="project-cli-workspace"></div>
+          ${errHtml}${okHtml}${mainHtml}
+        </main>
+      </div>
+      <div id="account-modal-host"></div>
+    `;
+
+    leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
+    leptos.mount_cli_switcher(document.getElementById("project-cli-workspace"), JSON.stringify(state.projectCli));
+    const cron = document.getElementById("cron-workspace");
+    if (cron) leptos.mount_cron(cron, state.activeProjectId, state.accessToken || "");
+    const kanban = document.getElementById("kanban-workspace");
+    if (kanban) leptos.mount_kanban(kanban, state.activeProjectId, state.accessToken || "", state.user.role === "viewer");
+    const files = document.getElementById("files-git-workspace");
+    if (files) {
+      leptos.mount_files_git(files, JSON.stringify({
+        project_name: activeProject.name,
+        workspace_path: activeProject.workspace_path,
+        read_only: state.user.role === "viewer",
+        respect_gitignore: state.respectGitignore,
+        file_tree: state.fileTree,
+        collapsed_dirs: state.collapsedDirs,
+        active_file: state.activeFile,
+        editor_text: state.editorText,
+        editor_dirty: state.editorDirty,
+        git_status: state.gitStatus,
+        git_diff: state.gitDiff,
+        diff_mode: state.diffMode,
+        diff_path: state.diffPath,
+      }));
+    }
+    const chat = document.getElementById("chat-workspace-host");
+    if (chat && activeProject) {
+      const isViewer = state.user.role === "viewer";
+      const detail = state.activeSessionDetail;
+      const activeSess = detail ? detail.session : state.sessions.find((s) => s.id === state.activeSessionId) || null;
+      const selectedProvider = state.projectCli?.active_provider;
+      const nativeSource = displaysNativeTranscript(detail);
+      leptos.mount_chat_workspace(chat, JSON.stringify({
+        project_name: activeProject.name,
+        workspace_path: activeProject.workspace_path,
+        is_viewer: isViewer,
+        sessions: state.sessions,
+        active_session_id: state.activeSessionId,
+        session_search: state.sessionSearch || "",
+        handoff_provider: !isViewer && activeSess?.message_count && activeSess.provider !== selectedProvider ? selectedProvider : null,
+        has_active_session: Boolean(activeSess),
+        approval_mode: activeSess ? activeSess.approval_mode : "full_auto",
+        has_active_turn: Boolean(state.schedulerStatus && state.schedulerStatus.active_session_id === state.activeSessionId),
+        show_terminal: Boolean(state.showProjectTerminal),
+        can_switch_source: Boolean(detail?.session.transcript_path && detail.turns?.length),
+        native_source: nativeSource,
+        native_messages: nativeSource ? detail.native_messages || [] : [],
+        turns: !nativeSource && detail?.turns ? detail.turns : [],
+      }));
+    }
+    const accounts = document.getElementById("accounts-workspace");
+    if (accounts) {
+      leptos.mount_accounts_admin(accounts, JSON.stringify({
+        accounts: state.adminAccounts,
+        projects: state.projects,
+        acl_project_id: state.aclProjectId,
+        acl_members: state.aclMembers,
+        acl_list: state.aclList,
+      }));
+    }
+    const modal = state.addAccountModal;
+    if (modal) {
+      const account = modal.step === "create" ? null : (state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account);
+      leptos.mount_account_modal(document.getElementById("account-modal-host"), JSON.stringify({ step: modal.step, tab: modal.tab || "pty", account }));
+    }
+    const asm = document.getElementById("asm-workspace");
+    if (asm) {
+      leptos.mount_agents_skills_mcp(asm, JSON.stringify({
+        provider: state.asmProvider,
+        scope: state.asmScope,
+        sub_tab: state.asmSubTab,
+        has_project: Boolean(state.activeProjectId),
+        can_edit: asmCanMutate(),
+        raw_mode: state.asmRawMode,
+        agents: state.asmAgents,
+        selected_agent: state.asmSelectedAgent,
+        skills: state.asmSkills,
+        selected_skill: state.asmSelectedSkill,
+        mcp_config: state.asmMcpConfig,
+        presets: state.asmPresets,
+        graphify_result: state.asmGraphifyResult,
+      }));
+    }
+    const admin = document.getElementById("admin-workspace");
+    if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
+    bindDashboardHandlers();
+  }
+
+  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {
+    closeActivePty();
+    const host = document.getElementById(hostId);
+    if (!host) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    let cols = 90;
+    let rows = 24;
+    let term = null;
+    const fallbackLog = document.getElementById(fallbackLogId);
+    const fallbackForm = document.getElementById(fallbackFormId);
+
+    if (typeof window.Terminal === "function") {
+      host.innerHTML = "";
+      term = new window.Terminal({ cols, rows, cursorBlink: true });
+      if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
+        term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+      }
+      term.open(host);
+      state.ptyTerminal = term;
+    } else if (fallbackLog && fallbackForm) {
+      fallbackLog.textContent = "Connecting to PTY...\n";
+      fallbackForm.style.display = "flex";
+    }
+
+    const wsUrl = `${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`;
+    const ws = new WebSocket(wsUrl);
+    state.ptySocket = ws;
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "output") {
+          if (term) term.write(msg.data);
+          else if (fallbackLog) fallbackLog.innerHTML += linkifyUrls(msg.data);
+        } else if (msg.type === "exit") {
+          const note = `\r\n[Process exited with code ${msg.code}]\r\n`;
+          if (term) term.write(note);
+          else if (fallbackLog) fallbackLog.innerHTML += esc(note);
+        } else if (msg.type === "error") {
+          const note = `\r\n[PTY error: ${msg.message}]\r\n`;
+          if (term) term.write(note);
+          else if (fallbackLog) fallbackLog.innerHTML += esc(note);
+        }
+      } catch {}
+    };
+
+    if (term) {
+      term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data }));
+        }
+      });
+      term.onResize((sz) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
+        }
+      });
+    } else if (fallbackForm) {
+      fallbackForm.onsubmit = (e) => {
+        e.preventDefault();
+        const inp = document.getElementById(fallbackInputId);
+        if (inp && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
+          inp.value = "";
+        }
+      };
+    }
+  }
+
+  function connectOAuthTerminal(accountId) {
+    const wsPath = `/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}`;
+    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath);
+  }
+
+  function connectProjectTerminal(mode) {
+    if (!state.activeProjectId) return;
+    const sidParam = mode === "cli" && state.activeSessionId ? `&session_id=${encodeURIComponent(state.activeSessionId)}` : "";
+    const wsPath = `/api/projects/${encodeURIComponent(state.activeProjectId)}/terminal/ws?token=${encodeURIComponent(state.accessToken)}&mode=${encodeURIComponent(mode)}${sidParam}`;
+    attachPtyTerminal("project-xterm-host", "project-xterm-fallback", "project-xterm-fallback-form", "project-xterm-fallback-input", wsPath);
+  }
+
+  function asmBasePath() {
+    if (state.asmScope === "global") return "/api/global";
+    if (!state.activeProjectId) return null;
+    return `/api/projects/${state.activeProjectId}`;
+  }
+
+  function asmCanMutate() {
+    if (!state.user) return false;
+    if (state.asmScope === "global") return state.user.role === "admin";
+    return state.user.role !== "viewer" && Boolean(state.activeProjectId);
+  }
+
+  async function loadAsmData() {
+    const base = asmBasePath();
+    if (!base) {
+      state.asmAgents = [];
+      state.asmSkills = [];
+      state.asmMcpConfig = null;
+      return;
+    }
+    const prov = state.asmProvider;
+    try {
+      const [agents, skills, mcpCfg] = await Promise.all([
+        api(`${base}/agents/${prov}`),
+        api(`${base}/skills/${prov}`),
+        api(`${base}/mcp/${prov}`),
+      ]);
+      state.asmAgents = agents || [];
+      state.asmSkills = skills || [];
+      state.asmMcpConfig = mcpCfg || null;
+    } catch (err) {
+      state.error = err.message;
+    }
+  }
+
+  function bindDashboardHandlers() {
+    const kanbanTab = document.getElementById("proj-tab-kanban");
+    if (kanbanTab) kanbanTab.onclick = () => { state.projectTab = "kanban"; render(); };
+    const projTabChat = document.getElementById("proj-tab-chat");
+    if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
+
+    const projTabCron = document.getElementById("proj-tab-cron");
+    if (projTabCron) projTabCron.onclick = () => { state.projectTab = "cron"; render(); };
+
+    const projTabFiles = document.getElementById("proj-tab-files");
+    if (projTabFiles) projTabFiles.onclick = () => { state.projectTab = "files"; render(); };
+
+    const newSessBtn = document.getElementById("new-chat-session-btn");
+    if (newSessBtn) {
+      newSessBtn.onclick = async () => {
+        try {
+          const created = await api(`/api/projects/${state.activeProjectId}/sessions`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          state.activeSessionId = created.id;
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const searchInp = document.getElementById("session-search-input");
+    if (searchInp) {
+      searchInp.onchange = async () => {
+        state.sessionSearch = searchInp.value;
+        await loadProjectSessions();
+        render();
+      };
+    }
+
+    const navAsm = document.getElementById("nav-asm");
+    if (navAsm) {
+      navAsm.onclick = async () => {
+        state.tab = "agents_skills_mcp";
+        state.error = null; state.notice = null;
+        await loadAsmData();
+        render();
+      };
+    }
+
+    const toggleGi = document.getElementById("toggle-gitignore");
+    if (toggleGi) {
+      toggleGi.onchange = async () => {
+        state.respectGitignore = toggleGi.checked;
+        await loadProjectWorkspace();
+        render();
+      };
+    }
+
+    const handoff = document.getElementById("chat-handoff");
+    if (handoff) {
+      handoff.onclick = async () => {
+        const projectId = state.activeProjectId;
+        const sourceId = state.activeSessionId;
+        handoff.disabled = true;
+        state.error = null;
+        try {
+          const continuation = await api(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sourceId)}/handoff`, {
+            method: "POST",
+            body: JSON.stringify({ provider: handoff.dataset.provider }),
+          });
+          if (state.activeProjectId !== projectId || state.activeSessionId !== sourceId) return;
+          state.activeSessionId = continuation.id;
+          state.sessionSearch = "";
+          await loadProjectSessions();
+        } catch (error) {
+          state.error = error.message;
+        }
+        render();
+      };
+    }
+
+    const chatSource = document.getElementById("chat-feed-source");
+    if (chatSource) {
+      chatSource.onclick = () => {
+        state.nativeTranscriptSessionId = displaysNativeTranscript(state.activeSessionDetail) ? null : state.activeSessionId;
+        connectNativeTranscript();
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-sid]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.activeSessionId = btn.dataset.sid;
+        await loadProjectSessions();
+        render();
+      };
+    });
+
+    const refreshWs = document.getElementById("refresh-workspace-btn");
+    if (refreshWs) {
+      refreshWs.onclick = async () => {
+        await loadProjectWorkspace();
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-dir-toggle]").forEach((btn) => {
+      btn.onclick = () => {
+        const p = btn.dataset.dirToggle;
+        state.collapsedDirs[p] = !state.collapsedDirs[p];
+        render();
+      };
+    });
+
+    const toggleApprovalBtn = document.getElementById("toggle-approval-mode-btn");
+    if (toggleApprovalBtn && state.activeSessionDetail) {
+      toggleApprovalBtn.onclick = async () => {
+        const cur = state.activeSessionDetail.session.approval_mode;
+        const next = cur === "interactive" ? "full_auto" : "interactive";
+        try {
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ approval_mode: next }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const toggleTermBtn = document.getElementById("toggle-project-terminal-btn");
+    if (toggleTermBtn) {
+      toggleTermBtn.onclick = () => {
+        state.showProjectTerminal = !state.showProjectTerminal;
+        render();
+        if (state.showProjectTerminal) {
+          connectProjectTerminal(state.terminalMode);
+        }
+      };
+    }
+
+    document.querySelectorAll("[data-file-open]").forEach((btn) => {
+      btn.onclick = () => openWorkspaceFile(btn.dataset.fileOpen);
+    });
+
+    const editorEl = document.getElementById("code-editor");
+    if (editorEl) {
+      editorEl.oninput = () => {
+        state.editorText = editorEl.value;
+        state.editorDirty = true;
+      };
+    }
+
+    const saveBtn = document.getElementById("save-file-btn");
+    if (saveBtn) {
+      saveBtn.onclick = () => saveWorkspaceFile();
+    }
+
+    const newFileForm = document.getElementById("new-file-form");
+    if (newFileForm) {
+      newFileForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const path = newFileForm.path.value.trim();
+        if (!path) return;
+        const pid = encodeURIComponent(state.activeProjectId);
+        try {
+          await api(`/api/projects/${pid}/files/content`, {
+            method: "POST",
+            body: JSON.stringify({ path, content: "" }),
+          });
+          await loadProjectWorkspace();
+          await openWorkspaceFile(path);
+        } catch (err) {
+          state.error = err.message;
+          render();
+        }
+      };
+    }
+
+    const closeTermBtn = document.getElementById("close-project-term");
+    if (closeTermBtn) {
+      closeTermBtn.onclick = () => { state.showProjectTerminal = false; render(); };
+    }
+
+    const shellModeBtn = document.getElementById("term-mode-shell");
+    if (shellModeBtn) {
+      shellModeBtn.onclick = () => { state.terminalMode = "shell"; connectProjectTerminal("shell"); };
+    }
+
+    const cliModeBtn = document.getElementById("term-mode-cli");
+    if (cliModeBtn) {
+      cliModeBtn.onclick = () => { state.terminalMode = "cli"; connectProjectTerminal("cli"); };
+    }
+
+    const stopBtn = document.getElementById("stop-active-turn-btn");
+    if (stopBtn && state.activeSessionId) {
+      stopBtn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}/stop`, {
+            method: "POST",
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-allow-turn]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/turns/${btn.dataset.allowTurn}/permission`, {
+            method: "POST",
+            body: JSON.stringify({ approved: true, request_id: btn.dataset.reqId }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-deny-turn]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/turns/${btn.dataset.denyTurn}/permission`, {
+            method: "POST",
+            body: JSON.stringify({ approved: false, request_id: btn.dataset.reqId }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const promptForm = document.getElementById("chat-prompt-form");
+    if (promptForm) {
+      promptForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("chat-prompt-input");
+        const prompt = input ? input.value.trim() : "";
+        if (!prompt) return;
+        try {
+          if (!state.activeSessionId) {
+            const created = await api(`/api/projects/${state.activeProjectId}/sessions`, {
+              method: "POST",
+              body: JSON.stringify({}),
+            });
+            state.activeSessionId = created.id;
+          }
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}/turns`, {
+            method: "POST",
+            body: JSON.stringify({ prompt }),
+          });
+          if (input) input.value = "";
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-diff-path]").forEach((btn) => {
+      btn.onclick = () => loadGitDiff(btn.dataset.diffPath, btn.dataset.diffStaged === "true");
+    });
+
+    const diffAllBtn = document.getElementById("diff-all-btn");
+    if (diffAllBtn) {
+      diffAllBtn.onclick = () => loadGitDiff(null, false);
+    }
+
+    const toggleDiffModeBtn = document.getElementById("toggle-diff-mode-btn");
+    if (toggleDiffModeBtn) {
+      toggleDiffModeBtn.onclick = () => {
+        state.diffMode = state.diffMode === "unified" ? "split" : "unified";
+        loadGitDiff(state.diffPath, state.diffStaged);
+      };
+    }
+
+    const navAdmin = document.getElementById("nav-admin");
+    if (navAdmin) navAdmin.onclick = () => { state.tab = "admin"; render(); };
+
+    const navAccounts = document.getElementById("nav-accounts");
+    if (navAccounts) navAccounts.onclick = () => { state.tab = "accounts"; render(); };
+
+    const pairMessengerButton = document.getElementById("pair-messenger-btn");
+    if (pairMessengerButton) pairMessengerButton.onclick = async () => {
+      const userId = state.user.id;
+      pairMessengerButton.disabled = true;
+      try {
+        const pairing = await api("/api/messenger/pairing-code", { method: "POST" });
+        if (state.user?.id !== userId) return;
+        state.messengerPairing = `Send /pair ${pairing.code} in a bot DM within ${Math.ceil(pairing.expires_in_secs / 60)} minutes.`;
+        setTimeout(() => {
+          if (!state.messengerPairing?.includes(`/pair ${pairing.code} `)) return;
+          state.messengerPairing = null;
+          const result = document.getElementById("pair-messenger-result");
+          if (result) result.textContent = "";
+        }, pairing.expires_in_secs * 1000);
+      } catch (err) {
+        if (state.user?.id !== userId) return;
+        state.messengerPairing = err.message;
+      } finally {
+        const result = document.getElementById("pair-messenger-result");
+        if (result) result.textContent = state.messengerPairing || "";
+        pairMessengerButton.disabled = false;
+      }
+    };
+
+    document.getElementById("logout-btn").onclick = async () => {
+      try { await api("/api/auth/logout", { method: "POST" }); } catch {}
+      clearSession();
+      state.screen = "login";
+      render();
+    };
+
+    const openModalBtn = document.getElementById("open-add-account-btn");
+    if (openModalBtn) {
+      openModalBtn.onclick = () => {
+        state.addAccountModal = { step: "create", tab: "pty", accountId: null, account: null };
+        render();
+      };
+    }
+
+    const closeModalBtn = document.getElementById("close-account-modal");
+    if (closeModalBtn) {
+      closeModalBtn.onclick = () => {
+        state.addAccountModal = null;
+        loadAuthenticatedData();
+      };
+    }
+
+    const createAccForm = document.getElementById("create-account-form");
+    if (createAccForm) {
+      createAccForm.onsubmit = async (e) => {
+        e.preventDefault();
+        state.error = null;
+        const fd = new FormData(e.target);
+        try {
+          const acc = await api("/api/admin/accounts", {
+            method: "POST",
+            body: JSON.stringify(Object.fromEntries(fd.entries())),
+          });
+          state.adminAccounts.push(acc);
+          state.addAccountModal = { step: "auth", tab: "pty", accountId: acc.id, account: acc };
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const tabPty = document.getElementById("modal-tab-pty");
+    if (tabPty) tabPty.onclick = () => { state.addAccountModal.tab = "pty"; render(); };
+
+    const tabCreds = document.getElementById("modal-tab-creds");
+    if (tabCreds) tabCreds.onclick = () => { state.addAccountModal.tab = "credentials"; render(); };
+
+    const launchPtyBtn = document.getElementById("launch-oauth-pty-btn");
+    if (launchPtyBtn && state.addAccountModal?.accountId) {
+      launchPtyBtn.onclick = () => connectOAuthTerminal(state.addAccountModal.accountId);
+    }
+
+    const credPicker = document.getElementById("cred-file-picker");
+    if (credPicker) {
+      credPicker.onchange = async () => {
+        const file = credPicker.files && credPicker.files[0];
+        if (!file) return;
+        document.getElementById("cred-filename").value = file.name;
+        document.getElementById("cred-content").value = await file.text();
+      };
+    }
+
+    const uploadCredForm = document.getElementById("upload-cred-form");
+    if (uploadCredForm && state.addAccountModal?.accountId) {
+      uploadCredForm.onsubmit = async (e) => {
+        e.preventDefault();
+        state.error = null; state.notice = null;
+        const filename = document.getElementById("cred-filename").value;
+        const content = document.getElementById("cred-content").value;
+        try {
+          await api(`/api/admin/accounts/${state.addAccountModal.accountId}/credentials`, {
+            method: "POST",
+            body: JSON.stringify({ filename, content }),
+          });
+          state.notice = `Saved ${filename}`;
+          state.adminAccounts = await api("/api/admin/accounts");
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-del-cred]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.error = null;
+        try {
+          await api(`/api/admin/accounts/${state.addAccountModal.accountId}/credentials/${encodeURIComponent(btn.dataset.delCred)}`, {
+            method: "DELETE",
+          });
+          state.adminAccounts = await api("/api/admin/accounts");
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-auth-acc]").forEach((btn) => {
+      btn.onclick = () => {
+        const acc = state.adminAccounts.find((a) => a.id === btn.dataset.authAcc);
+        if (acc) {
+          state.addAccountModal = { step: "auth", tab: "pty", accountId: acc.id, account: acc };
+          render();
+        }
+      };
+    });
+
+    document.querySelectorAll("[data-rename-acc]").forEach((btn) => {
+      btn.onclick = async () => {
+        const acc = state.adminAccounts.find((a) => a.id === btn.dataset.renameAcc);
+        const nextName = window.prompt("New account name:", acc ? acc.name : "");
+        if (!nextName) return;
+        try {
+          await api(`/api/admin/accounts/${btn.dataset.renameAcc}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: nextName }),
+          });
+          await loadAuthenticatedData();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-del-acc]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/admin/accounts/${btn.dataset.delAcc}`, { method: "DELETE" });
+          await loadAuthenticatedData();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const aclProjSel = document.getElementById("acl-project-select");
+    if (aclProjSel) {
+      aclProjSel.onchange = async () => {
+        state.aclProjectId = aclProjSel.value;
+        await loadAclProjectData(state.aclProjectId);
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-save-acl]").forEach((btn) => {
+      btn.onclick = async () => {
+        const uid = btn.dataset.saveAcl;
+        const unrestrictedBox = document.querySelector(`[data-acl-unrestricted="${uid}"]`);
+        const isUnrestricted = unrestrictedBox && unrestrictedBox.checked;
+        const allowed_accounts = isUnrestricted
+          ? null
+          : Array.from(document.querySelectorAll(`[data-acl-acc="${uid}"]:checked`)).map((el) => el.value);
+        try {
+          await api(`/api/admin/projects/${state.aclProjectId}/members/${uid}/accounts`, {
+            method: "PUT",
+            body: JSON.stringify({ allowed_accounts }),
+          });
+          state.notice = "Updated Developer account ACL.";
+          await loadAclProjectData(state.aclProjectId);
+          await loadProjectCli();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-scope]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.asmScope = btn.dataset.asmScope;
+        state.asmSelectedAgent = null;
+        state.asmSelectedSkill = null;
+        await loadAsmData();
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-prov]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.asmProvider = btn.dataset.asmProv;
+        state.asmSelectedAgent = null;
+        state.asmSelectedSkill = null;
+        await loadAsmData();
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-sub]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSubTab = btn.dataset.asmSub;
+        render();
+      };
+    });
+
+    const toggleRawBtn = document.getElementById("asm-toggle-raw-btn");
+    if (toggleRawBtn) {
+      toggleRawBtn.onclick = () => {
+        state.asmRawMode = !state.asmRawMode;
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-asm-edit-agent]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSelectedAgent = state.asmAgents.find((a) => a.name === btn.dataset.asmEditAgent) || null;
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-agent]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/agents/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelAgent)}`, { method: "DELETE" });
+          state.asmSelectedAgent = null;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmAgentForm = document.getElementById("asm-agent-form");
+    if (asmAgentForm) {
+      asmAgentForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        state.error = null; state.notice = null;
+        const name = document.getElementById("asm-agent-name").value.trim();
+        const payload = state.asmRawMode
+          ? { name, raw_markdown: document.getElementById("asm-agent-raw").value }
+          : {
+              name,
+              description: document.getElementById("asm-agent-desc").value,
+              model: document.getElementById("asm-agent-model").value,
+              tools: Array.from(document.querySelectorAll('input[name="asm_tools"]:checked')).map((el) => el.value),
+              disallowed_tools: document.getElementById("asm-agent-disallowed").value.split(",").map((s) => s.trim()).filter(Boolean),
+              permission_mode: document.getElementById("asm-agent-perm").value,
+              system_prompt: document.getElementById("asm-agent-prompt").value,
+            };
+        try {
+          const saved = await api(`${base}/agents/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          state.asmSelectedAgent = saved;
+          state.notice = `Saved subagent '${saved.name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-asm-edit-skill]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSelectedSkill = state.asmSkills.find((s) => s.name === btn.dataset.asmEditSkill) || null;
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-share-skill]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        const nextShared = btn.dataset.shared !== "true";
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmShareSkill)}/share`, {
+            method: "PUT",
+            body: JSON.stringify({ shared: nextShared }),
+          });
+          state.asmSelectedSkill = updated;
+          state.notice = nextShared ? "Skill shared across CLIs." : "Cross-CLI skill links removed.";
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-skill]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelSkill)}`, { method: "DELETE" });
+          state.asmSelectedSkill = null;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmSkillForm = document.getElementById("asm-skill-form");
+    if (asmSkillForm) {
+      asmSkillForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        const name = document.getElementById("asm-skill-name").value.trim();
+        const skill_md = document.getElementById("asm-skill-md").value;
+        const wantShare = document.getElementById("asm-skill-share-toggle").checked;
+        try {
+          let saved = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, skill_md, companion_files: [] }),
+          });
+          if (saved.is_shared !== wantShare) {
+            saved = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(name)}/share`, {
+              method: "PUT",
+              body: JSON.stringify({ shared: wantShare }),
+            });
+          }
+          state.asmSelectedSkill = saved;
+          state.notice = `Saved skill '${saved.name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const asmCompForm = document.getElementById("asm-comp-form");
+    if (asmCompForm) {
+      asmCompForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        const skillName = document.getElementById("asm-skill-name")?.value?.trim();
+        if (!base || !skillName) return;
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(skillName)}/files`, {
+            method: "PUT",
+            body: JSON.stringify({
+              relative_path: document.getElementById("asm-comp-path").value.trim(),
+              content: document.getElementById("asm-comp-content").value,
+            }),
+          });
+          state.asmSelectedSkill = updated;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-asm-del-comp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        const skillName = state.asmSelectedSkill?.name;
+        if (!base || !skillName) return;
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(skillName)}/files?path=${encodeURIComponent(btn.dataset.asmDelComp)}`, {
+            method: "DELETE",
+          });
+          state.asmSelectedSkill = updated;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-preset]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/presets/${encodeURIComponent(btn.dataset.asmPreset)}`, { method: "POST" });
+          state.notice = `Applied preset ${btn.dataset.asmPreset}.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-sync-mcp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmSyncMcp)}/sync`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          state.notice = `Synced '${btn.dataset.asmSyncMcp}' across all CLIs.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-mcp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelMcp)}`, { method: "DELETE" });
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmMcpForm = document.getElementById("asm-mcp-form");
+    if (asmMcpForm) {
+      asmMcpForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        const name = document.getElementById("asm-mcp-name").value.trim();
+        const command = document.getElementById("asm-mcp-cmd").value.trim() || null;
+        const args = document.getElementById("asm-mcp-args").value.split(/\s+/).filter(Boolean);
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, command, args, env: {}, url: null, disabled: false }),
+          });
+          state.notice = `Saved MCP server '${name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const graphifyBtn = document.getElementById("asm-run-graphify-btn");
+    if (graphifyBtn) {
+      graphifyBtn.onclick = async () => {
+        if (!state.activeProjectId) return;
+        state.error = null; state.notice = null;
+        try {
+          const res = await api(`/api/projects/${state.activeProjectId}/mcp/graphify/index`, { method: "POST" });
+          state.asmGraphifyResult = `${res.status}: ${res.graph_path}\n${res.output}`;
+          state.notice = "Graphify indexing finished.";
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+  }
+
+  async function start() {
+    try {
+      const bindings = await import("/leptos_gateway.js");
+      await bindings.default();
+      leptos = bindings;
+    } catch (error) {
+      console.error("Unable to load the Gateway UI", error);
+      app.textContent = "Unable to load the Gateway UI. Reload to try again.";
+      return;
+    }
+    await boot();
+  }
+
+  void start();
+})();
