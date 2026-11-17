@@ -189,6 +189,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
             turn_id TEXT REFERENCES chat_turns(id) ON DELETE SET NULL,
             blocked_reason TEXT,
+            blocked_for_approval INTEGER NOT NULL DEFAULT 0,
             result_summary TEXT,
             created_by TEXT NOT NULL REFERENCES users(id),
             run_user_id TEXT REFERENCES users(id),
@@ -310,6 +311,26 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let has_blocked_for_approval: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('kanban_cards') WHERE name = 'blocked_for_approval')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !has_blocked_for_approval {
+        sqlx::query("ALTER TABLE kanban_cards ADD COLUMN blocked_for_approval INTEGER NOT NULL DEFAULT 0")
+            .execute(&mut *tx)
+            .await?;
+        // Translate the legacy display text only when migrating an existing database.
+        sqlx::query(
+            "UPDATE kanban_cards SET blocked_for_approval = 1
+             WHERE lane = 'blocked' AND active_run = 1 AND blocked_reason = 'Awaiting tool approval'",
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
 
     Ok(())
 }

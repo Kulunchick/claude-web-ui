@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 pub use claude_web_ui_shared::accounts::CliProvider;
 pub use claude_web_ui_shared::chat::TurnEvent;
+pub use claude_web_ui_shared::messenger::MessengerPlatform;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -49,30 +50,6 @@ pub trait CliRunner: Send + Sync {
     ) -> Result<(), String>;
 
     async fn spawn_pty(&self, invocation: PtyInvocation) -> Result<SpawnedPty, String>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MessengerPlatform {
-    Telegram,
-    Discord,
-}
-
-impl MessengerPlatform {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Telegram => "telegram",
-            Self::Discord => "discord",
-        }
-    }
-
-    pub(crate) fn from_storage(value: &str) -> Option<Self> {
-        match value {
-            "telegram" => Some(Self::Telegram),
-            "discord" => Some(Self::Discord),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

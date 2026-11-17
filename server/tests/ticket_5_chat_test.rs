@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use claude_web_ui_server::chat::{
     AdapterTurnRequest, AntigravityAdapter, ClaudeCodeAdapter, CliAdapter, CodexAdapter,
+    run_native_cli_turn,
 };
 use claude_web_ui_server::fakes::{FakeCliRunner, FakeMessengerTransport};
 use claude_web_ui_server::traits::{
@@ -1311,6 +1312,51 @@ async fn project_terminal_pty_and_rbac_enforces_viewer_readonly() {
     assert_eq!(h.cli_runner.recorded_pty_resizes(), vec![(120, 40)]);
     assert!(!h.cli_runner.recorded_pty_inputs().is_empty());
 
+    let codex = h
+        .create_account(&admin.access_token, CliProvider::Codex, "Dev Codex")
+        .await;
+    let (status, _) = h
+        .request_json(
+            Method::PUT,
+            &format!("/api/projects/{}/cli", alpha.id),
+            Some(&admin.access_token),
+            Some(json!({ "provider": "codex", "account_id": codex.id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = h
+        .request_json(
+            Method::PUT,
+            &format!("/api/admin/projects/{}/members/{}/accounts", alpha.id, dev.user.id),
+            Some(&admin.access_token),
+            Some(json!({ "allowed_accounts": [codex.id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The chosen session uses the remembered Claude account, even though Codex is active.
+    let url = format!(
+        "ws://{}/api/projects/{}/terminal/ws?token={}&session_id={}",
+        addr, alpha.id, dev.access_token, session.id
+    );
+    let error = tokio_tungstenite::connect_async(url).await.unwrap_err();
+    assert!(matches!(
+        error,
+        tokio_tungstenite::tungstenite::Error::Http(response)
+            if response.status() == StatusCode::FORBIDDEN
+    ));
+
+    let (status, _) = h
+        .request_json(
+            Method::POST,
+            &format!("/api/projects/{}/sessions/{}/turns", alpha.id, session.id),
+            Some(&dev.access_token),
+            Some(json!({ "prompt": "Run against this session" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
     server_task.abort();
 }
 
@@ -1341,4 +1387,78 @@ async fn embedded_ui_serves_chat_workspace_approvals_and_project_terminal() {
     assert!(js.contains("/chat/ws"));
 }
 
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn aborting_native_runner_stops_descendant_process() {
+    use std::time::Duration;
+    use tokio::time::{sleep, timeout};
 
+    let directory = TempDir::new().unwrap();
+    let heartbeat = directory.path().join("heartbeat");
+    let invocation = CliInvocation {
+        provider: CliProvider::ClaudeCode,
+        program: std::env::current_exe().unwrap().to_str().unwrap().to_owned(),
+        args: vec![
+            "--exact".into(),
+            "native_runner_child".into(),
+            "--ignored".into(),
+        ],
+        working_dir: directory.path().to_owned(),
+        env: BTreeMap::from([
+            ("NATIVE_RUNNER_CHILD".into(), "parent".into()),
+            ("NATIVE_RUNNER_HEARTBEAT".into(), heartbeat.to_str().unwrap().into()),
+        ]),
+    };
+    let (event_tx, _events) = mpsc::unbounded_channel();
+    let (_approval, approval_rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(run_native_cli_turn(invocation, event_tx, approval_rx));
+
+    timeout(Duration::from_secs(5), async {
+        while !heartbeat.exists() {
+            assert!(!task.is_finished(), "the runner exited before its grandchild started");
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("grandchild started");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+
+    // Process termination can be asynchronous. A live grandchild updates this file repeatedly.
+    sleep(Duration::from_millis(150)).await;
+    let stopped_at = std::fs::read(&heartbeat).unwrap();
+    sleep(Duration::from_millis(250)).await;
+    assert_eq!(std::fs::read(&heartbeat).unwrap(), stopped_at);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+#[ignore = "helper subprocess for the native runner integration test"]
+fn native_runner_child() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    match std::env::var("NATIVE_RUNNER_CHILD").as_deref() {
+        Ok("parent") => {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "native_runner_child", "--ignored"])
+                .env("NATIVE_RUNNER_CHILD", "grandchild")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+        Ok("grandchild") => {
+            let mut file = std::fs::File::create(std::env::var_os("NATIVE_RUNNER_HEARTBEAT").unwrap())
+                .unwrap();
+            for _ in 0..100 {
+                file.write_all(b"+").unwrap();
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        _ => {}
+    }
+}

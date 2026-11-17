@@ -1,26 +1,12 @@
 use crate::accounts::CliProvider;
 use crate::chat::ChatTurnStatus;
+use crate::messenger::MessengerPlatform;
+pub use crate::messenger::MessengerPlatform as CronMessengerPlatform;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CronMessengerPlatform {
-    Telegram,
-    Discord,
-}
-
-impl CronMessengerPlatform {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Telegram => "telegram",
-            Self::Discord => "discord",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CronDestination {
-    pub platform: CronMessengerPlatform,
+    pub platform: MessengerPlatform,
     pub chat_id: String,
     pub thread_id: Option<String>,
 }

@@ -1,4 +1,9 @@
-use crate::accounts::{bridge_pty_websocket, resolve_project_cli_env};
+mod process_tree;
+
+use crate::accounts::{
+    account_env_vars, authorize_turn_account, bridge_pty_websocket, resolve_project_cli_account,
+    resolve_provider_account,
+};
 use crate::auth::{project_rbac_middleware, record_audit_log, AppError, ProjectContext};
 use crate::traits::{CliInvocation, CliRunner, PtyInvocation, TurnEvent};
 use crate::{AppState, GatewayConfig};
@@ -10,7 +15,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, Utc};
-use claude_web_ui_shared::accounts::CliProvider;
+use claude_web_ui_shared::accounts::{CliAccountDto, CliProvider};
 use claude_web_ui_shared::auth::Role;
 use claude_web_ui_shared::chat::{
     ApprovalMode, CancelTurnResponse, ChatSessionDetailDto, ChatSessionDto, ChatStreamEnvelope,
@@ -427,31 +432,28 @@ impl ExecutionScheduler {
         }
 
         let session = load_chat_session(&self.db, &params.project_id, &params.session_id).await?;
-        let (provider, account_id) = if let TurnOrigin::Cron { provider, account_id, .. } = &origin {
-            if session.provider != *provider {
-                return Err(AppError::bad_request("cron provider does not match the session"));
+        let (provider, account_id) = match &origin {
+            TurnOrigin::Cron { provider, account_id, .. } => {
+                if session.provider != *provider {
+                    return Err(AppError::bad_request("cron provider does not match the session"));
+                }
+                (*provider, account_id.clone())
             }
-            (*provider, account_id.clone())
-        } else if matches!(origin, TurnOrigin::Messenger) {
-            let (provider, account_id, _) = self.session_cli(&session).await?;
-            crate::accounts::authorize_turn_account(
+            _ => {
+                let (provider, account) =
+                    project_cli_target(&self.db, &params.project_id, Some(session.provider)).await?;
+                (provider, account.map(|account| account.id))
+            }
+        };
+        if matches!(origin, TurnOrigin::Interactive | TurnOrigin::Messenger) {
+            authorize_turn_account(
                 &self.db,
                 &params.project_id,
                 &params.user_id,
                 account_id.as_deref(),
-            ).await?;
-            (provider, account_id)
-        } else {
-            let (active_provider, active_account, _) =
-                resolve_project_cli_env(&self.db, &params.project_id).await?;
-            let provider = if session.provider != active_provider && session.native_session_id.is_none() {
-                active_provider
-            } else {
-                session.provider
-            };
-            let account_id = active_account.filter(|account| account.provider == provider).map(|account| account.id);
-            (provider, account_id)
-        };
+            )
+            .await?;
+        }
 
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -480,14 +482,28 @@ impl ExecutionScheduler {
             .execute(&mut *tx)
             .await?;
 
-        if let TurnOrigin::Kanban(card_id) = &origin {
-            sqlx::query("UPDATE kanban_cards SET turn_id = ?, assigned_cli = ? WHERE id = ?")
-                .bind(&turn_id).bind(provider.as_str()).bind(card_id).execute(&mut *tx).await?;
-        }
-        if let TurnOrigin::Cron { run_id, .. } = &origin {
-            sqlx::query("UPDATE cron_runs SET turn_id = ?, session_id = ? WHERE id = ?")
-                .bind(&turn_id).bind(&params.session_id).bind(run_id).execute(&mut *tx).await?;
-        }
+        let authorize_actor = (!matches!(origin, TurnOrigin::Kanban(_))).then_some(params.user_id);
+        let cron_target = match origin {
+            TurnOrigin::Kanban(card_id) => {
+                sqlx::query("UPDATE kanban_cards SET turn_id = ?, assigned_cli = ? WHERE id = ?")
+                    .bind(&turn_id)
+                    .bind(provider.as_str())
+                    .bind(card_id)
+                    .execute(&mut *tx)
+                    .await?;
+                None
+            }
+            TurnOrigin::Cron { run_id, provider, account_id } => {
+                sqlx::query("UPDATE cron_runs SET turn_id = ?, session_id = ? WHERE id = ?")
+                    .bind(&turn_id)
+                    .bind(&params.session_id)
+                    .bind(run_id)
+                    .execute(&mut *tx)
+                    .await?;
+                Some((provider, account_id))
+            }
+            _ => None,
+        };
         tx.commit().await?;
 
         let queue_position = {
@@ -502,12 +518,8 @@ impl ExecutionScheduler {
             session_id: params.session_id.clone(),
             project_id: params.project_id.clone(),
             prompt,
-            authorize_actor: matches!(origin, TurnOrigin::Messenger | TurnOrigin::Cron { .. })
-                .then_some(params.user_id),
-            cron_target: match origin {
-                TurnOrigin::Cron { provider, account_id, .. } => Some((provider, account_id)),
-                _ => None,
-            },
+            authorize_actor,
+            cron_target,
         });
 
         let turn = load_chat_turn(&self.db, &params.project_id, &turn_id).await?;
@@ -703,18 +715,10 @@ impl ExecutionScheduler {
         &self,
         session: &ChatSessionDto,
     ) -> Result<(CliProvider, Option<String>, BTreeMap<String, String>), AppError> {
-        let (active_provider, active_account, active_env) =
-            resolve_project_cli_env(&self.db, &session.project_id).await?;
-
-        // Each native session belongs to its provider, which may have a remembered account.
-        let effective_provider = session.provider;
-        let (account_id, env) = if active_provider == effective_provider {
-            (active_account.map(|a| a.id), active_env)
-        } else {
-            resolve_provider_account_env(&self.db, &session.project_id, effective_provider).await?
-        };
-
-        Ok((effective_provider, account_id, env))
+        let (provider, account) =
+            project_cli_target(&self.db, &session.project_id, Some(session.provider)).await?;
+        let env = cli_target_env(account.as_ref());
+        Ok((provider, account.map(|account| account.id), env))
     }
 
     async fn execute_single_turn(&self, job: QueuedTurnJob) -> Result<(), AppError> {
@@ -739,7 +743,7 @@ impl ExecutionScheduler {
                 self.session_cli(&session).await?
             };
         if let Some(user_id) = &job.authorize_actor {
-            if let Err(error) = crate::accounts::authorize_turn_account(
+            if let Err(error) = authorize_turn_account(
                 &self.db, &job.project_id, user_id, account_id.as_deref(),
             ).await {
                 sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ?")
@@ -813,6 +817,7 @@ impl ExecutionScheduler {
             tokio::select! {
                 _ = &mut cancel_rx => {
                     runner_task.abort();
+                    let _ = (&mut runner_task).await;
                     final_status = ChatTurnStatus::Cancelled;
                     final_error = Some("Turn cancelled by user".to_string());
                     let cancel_event = TurnEvent::TurnError {
@@ -1103,33 +1108,25 @@ impl ExecutionScheduler {
     }
 }
 
-pub(crate) async fn resolve_provider_account_env(
+async fn project_cli_target(
     db: &SqlitePool,
     project_id: &str,
-    provider: CliProvider,
-) -> Result<(Option<String>, BTreeMap<String, String>), AppError> {
-    let remembered: Option<String> = sqlx::query_scalar(
-        "SELECT account_id FROM project_provider_accounts WHERE project_id = ? AND provider = ?",
-    )
-    .bind(project_id)
-    .bind(provider.as_str())
-    .fetch_optional(db)
-    .await?;
-
-    if let Some(aid) = remembered {
-        let profile_dir: Option<String> =
-            sqlx::query_scalar("SELECT profile_dir FROM cli_accounts WHERE id = ?")
-                .bind(&aid)
-                .fetch_optional(db)
-                .await?;
-        if let Some(dir) = profile_dir {
-            return Ok((
-                Some(aid),
-                crate::accounts::account_env_vars(provider, StdPath::new(&dir)),
-            ));
+    session_provider: Option<CliProvider>,
+) -> Result<(CliProvider, Option<CliAccountDto>), AppError> {
+    let (active_provider, active_account) = resolve_project_cli_account(db, project_id).await?;
+    // Each native session belongs to its provider, which may have a remembered account.
+    match session_provider {
+        Some(provider) if provider != active_provider => {
+            Ok((provider, resolve_provider_account(db, project_id, provider).await?))
         }
+        _ => Ok((active_provider, active_account)),
     }
-    Ok((None, BTreeMap::new()))
+}
+
+fn cli_target_env(account: Option<&CliAccountDto>) -> BTreeMap<String, String> {
+    account.map_or_else(BTreeMap::new, |account| {
+        account_env_vars(account.provider, StdPath::new(&account.profile_dir))
+    })
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1207,7 +1204,7 @@ pub(crate) async fn create_gateway_session(
 ) -> Result<ChatSessionDto, AppError> {
     let provider = match req.provider {
         Some(p) => p,
-        None => resolve_project_cli_env(db, project_id).await?.0,
+        None => resolve_project_cli_account(db, project_id).await?.0,
     };
     let mut conn = db.acquire().await?;
     let id = insert_gateway_session(&mut conn, project_id, user_id, provider, req).await?;
@@ -2064,27 +2061,28 @@ async fn project_terminal_ws(
     let rows = query.rows.unwrap_or(24).clamp(8, 200);
     let working_dir = PathBuf::from(&ctx.project.workspace_path);
 
-    let (active_provider, _account, active_env) =
-        resolve_project_cli_env(&state.db, &ctx.project.id).await?;
+    let session = match query.session_id.as_deref() {
+        Some(id) => Some(load_chat_session(&state.db, &ctx.project.id, id).await?),
+        None => None,
+    };
+    let (provider, account) = project_cli_target(
+        &state.db,
+        &ctx.project.id,
+        session.as_ref().map(|session| session.provider),
+    )
+    .await?;
+    authorize_turn_account(
+        &state.db,
+        &ctx.project.id,
+        &ctx.user.user.id,
+        account.as_ref().map(|account| account.id.as_str()),
+    )
+    .await?;
+    let env = cli_target_env(account.as_ref());
 
-    let invocation = if let Some(ref sid) = query.session_id {
-        let session = load_chat_session(&state.db, &ctx.project.id, sid).await?;
-        let env = if session.provider == active_provider {
-            active_env
-        } else {
-            resolve_provider_account_env(&state.db, &ctx.project.id, session.provider)
-                .await?
-                .1
-        };
-        adapter_for(session.provider).build_pty_invocation(
-            session.native_session_id.as_deref(),
-            working_dir,
-            env,
-            cols,
-            rows,
-        )
-    } else if query.mode.as_deref() == Some("cli") {
-        adapter_for(active_provider).build_pty_invocation(None, working_dir, active_env, cols, rows)
+    let invocation = if session.is_some() || query.mode.as_deref() == Some("cli") {
+        let resume_id = session.as_ref().and_then(|session| session.native_session_id.as_deref());
+        adapter_for(provider).build_pty_invocation(resume_id, working_dir, env, cols, rows)
     } else {
         let shell_program = if cfg!(windows) {
             "powershell.exe".to_string()
@@ -2092,11 +2090,11 @@ async fn project_terminal_ws(
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
         };
         PtyInvocation {
-            provider: active_provider,
+            provider,
             program: shell_program,
             args: Vec::new(),
             working_dir,
-            env: active_env,
+            env,
             cols,
             rows,
         }
@@ -2130,8 +2128,7 @@ pub async fn run_native_cli_turn(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd
-        .spawn()
+    let (mut child, mut process_tree) = process_tree::ProcessTree::spawn(&mut cmd)
         .map_err(|e| format!("failed to spawn {}: {e}", invocation.program))?;
 
     let mut stdin = child.stdin.take();
@@ -2194,11 +2191,12 @@ pub async fn run_native_cli_turn(
         }
     }
 
+    let stderr_text = stderr_handle.await.unwrap_or_default();
     let status = child
         .wait()
         .await
         .map_err(|e| format!("wait on {} failed: {e}", invocation.program))?;
-    let stderr_text = stderr_handle.await.unwrap_or_default();
+    process_tree.reaped();
 
     if !saw_terminal {
         if status.success() {

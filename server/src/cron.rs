@@ -1,7 +1,9 @@
-use crate::accounts::{authorize_turn_account, cron_account_env, resolve_project_cli_env};
+use crate::accounts::{
+    authorize_turn_account, cron_account_env, resolve_project_cli_account, resolve_provider_account,
+};
 use crate::auth::{AppError, ProjectContext, project_rbac_middleware};
 use crate::chat::{
-    EnqueueTurnParams, create_gateway_session, load_chat_session, resolve_provider_account_env,
+    EnqueueTurnParams, create_gateway_session, load_chat_session,
 };
 use crate::traits::{MessengerPlatform, OutboundMessage};
 use crate::{AppState, ServerError};
@@ -13,7 +15,7 @@ use claude_web_ui_shared::accounts::CliProvider;
 use claude_web_ui_shared::auth::Role;
 use claude_web_ui_shared::chat::CreateChatSessionRequest;
 use claude_web_ui_shared::cron::{
-    CronDestination, CronJobConfig, CronJobDto, CronJobsResponse, CronMessengerPlatform,
+    CronDestination, CronJobConfig, CronJobDto, CronJobsResponse,
     CronRunDto, CronTrigger, SetCronEnabledRequest,
 };
 use croner::Cron;
@@ -106,11 +108,8 @@ async fn destinations(db: &SqlitePool, project_id: &str) -> Result<Vec<CronDesti
     .await?;
     rows.iter()
         .map(|row| {
-            let platform = match row.try_get::<&str, _>("platform")? {
-                "telegram" => CronMessengerPlatform::Telegram,
-                "discord" => CronMessengerPlatform::Discord,
-                _ => return Err(AppError::internal("Unrecognized messenger platform")),
-            };
+            let platform = MessengerPlatform::from_storage(row.try_get("platform")?)
+                .ok_or_else(|| AppError::internal("Unrecognized messenger platform"))?;
             Ok(CronDestination {
                 platform,
                 chat_id: row.try_get("chat_id")?,
@@ -182,7 +181,7 @@ async fn resolve_target(
     actor: &str,
     config: &CronJobConfig,
 ) -> Result<(CliProvider, Option<String>), AppError> {
-    let (active, active_account, _) = resolve_project_cli_env(db, project_id).await?;
+    let (active, active_account) = resolve_project_cli_account(db, project_id).await?;
     let pinned_provider = match &config.pinned_session_id {
         Some(id) => Some(load_chat_session(db, project_id, id).await?.provider),
         None => None,
@@ -203,9 +202,9 @@ async fn resolve_target(
             .filter(|account| account.provider == provider)
             .map(|account| account.id),
         None => {
-            resolve_provider_account_env(db, project_id, provider)
+            resolve_provider_account(db, project_id, provider)
                 .await?
-                .0
+                .map(|account| account.id)
         }
     };
     authorize_turn_account(db, project_id, actor, account.as_deref()).await?;
@@ -495,10 +494,6 @@ async fn send_report(
             "Cron notification channel is no longer linked to this project",
         ));
     }
-    let platform = match destination.platform {
-        CronMessengerPlatform::Telegram => MessengerPlatform::Telegram,
-        CronMessengerPlatform::Discord => MessengerPlatform::Discord,
-    };
     let details = run
         .error
         .as_deref()
@@ -507,7 +502,7 @@ async fn send_report(
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
         state.messenger.send_message(OutboundMessage {
-            platform,
+            platform: destination.platform,
             chat_id: destination.chat_id,
             thread_id: destination.thread_id,
             text: format!(

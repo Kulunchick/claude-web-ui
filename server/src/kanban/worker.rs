@@ -96,7 +96,7 @@ async fn tick(state: &AppState) -> Result<(), AppError> {
     // A single atomic claim prevents another worker from taking the same card.
     let candidate = sqlx::query(
         "UPDATE kanban_cards SET active_run = 1, lane = 'running', run_token = ?,
-            turn_id = NULL, git_base = NULL, git_diff = NULL, blocked_reason = NULL, result_summary = NULL, updated_at = ?
+            turn_id = NULL, git_base = NULL, git_diff = NULL, blocked_reason = NULL, blocked_for_approval = 0, result_summary = NULL, updated_at = ?
          WHERE id = (
            SELECT c.id FROM kanban_cards c
            WHERE ((c.lane = 'triage' AND c.decompose = 1) OR
@@ -232,14 +232,26 @@ async fn finish(
 ) -> Result<(), AppError> {
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let current = find_card(&mut tx, project, id).await?;
+    let blocked_for_approval: bool =
+        sqlx::query_scalar("SELECT blocked_for_approval FROM kanban_cards WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
     let auto_move = current.column == Column::Running
-        || (current.column == Column::Blocked
-            && current.blocked_reason.as_deref() == Some("Awaiting tool approval"));
+        || (current.column == Column::Blocked && blocked_for_approval);
     if auto_move {
-        sqlx::query("UPDATE kanban_cards SET lane = ?, blocked_reason = ?, result_summary = COALESCE(?, result_summary),
-                     updated_at = ? WHERE id = ?")
-            .bind(lane.as_str()).bind(reason).bind(summary).bind(Utc::now().to_rfc3339()).bind(id)
-            .execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE kanban_cards SET lane = ?, blocked_reason = ?, blocked_for_approval = ?,
+             result_summary = COALESCE(?, result_summary), updated_at = ? WHERE id = ?",
+        )
+        .bind(lane.as_str())
+        .bind(reason)
+        .bind(!terminal)
+        .bind(summary)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if terminal {
         sqlx::query(

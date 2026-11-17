@@ -1196,6 +1196,17 @@ pub async fn resolve_project_cli_env(
     db: &SqlitePool,
     project_id: &str,
 ) -> Result<(CliProvider, Option<CliAccountDto>, BTreeMap<String, String>), AppError> {
+    let (provider, account) = resolve_project_cli_account(db, project_id).await?;
+    let env = account.as_ref().map_or_else(BTreeMap::new, |account| {
+        account_env_vars(account.provider, StdPath::new(&account.profile_dir))
+    });
+    Ok((provider, account, env))
+}
+
+pub(crate) async fn resolve_project_cli_account(
+    db: &SqlitePool,
+    project_id: &str,
+) -> Result<(CliProvider, Option<CliAccountDto>), AppError> {
     let row = sqlx::query(
         "SELECT active_provider, active_account_id FROM project_active_cli WHERE project_id = ?",
     )
@@ -1223,15 +1234,30 @@ pub async fn resolve_project_cli_env(
         .fetch_optional(db)
         .await?;
         if let Some(r) = acc_row {
-            let acc = row_to_account(&r)?;
-            let env = account_env_vars(acc.provider, StdPath::new(&acc.profile_dir));
-            return Ok((provider, Some(acc), env));
+            return Ok((provider, Some(row_to_account(&r)?)));
         }
     }
 
-    Ok((provider, None, BTreeMap::new()))
+    Ok((provider, None))
 }
 
+pub(crate) async fn resolve_provider_account(
+    db: &SqlitePool,
+    project_id: &str,
+    provider: CliProvider,
+) -> Result<Option<CliAccountDto>, AppError> {
+    let row = sqlx::query(
+        "SELECT a.id, a.provider, a.name, a.slug, a.profile_dir, a.created_at, a.updated_at
+         FROM project_provider_accounts p JOIN cli_accounts a
+           ON a.id = p.account_id AND a.provider = p.provider
+         WHERE p.project_id = ? AND p.provider = ?",
+    )
+    .bind(project_id)
+    .bind(provider.as_str())
+    .fetch_optional(db)
+    .await?;
+    row.as_ref().map(row_to_account).transpose()
+}
 
 pub(crate) async fn cron_account_env(
     db: &SqlitePool,

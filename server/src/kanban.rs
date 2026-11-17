@@ -343,6 +343,7 @@ pub(crate) async fn move_expected(
         "UPDATE kanban_cards SET lane = ?,
             run_user_id = CASE WHEN ? = 'ready' THEN ? ELSE run_user_id END,
             blocked_reason = CASE WHEN ? = 'blocked' THEN COALESCE(?, blocked_reason) ELSE NULL END,
+            blocked_for_approval = 0,
             result_summary = COALESCE(?, result_summary), updated_at = ? WHERE id = ?",
     )
     .bind(target.as_str())
