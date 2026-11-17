@@ -12,11 +12,11 @@ pub mod traits;
 pub mod workspace_files;
 
 use crate::traits::{CliRunner, MessengerTransport};
+use axum::Router;
 use axum::body::Body;
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use rust_embed::Embed;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
@@ -43,6 +43,7 @@ pub struct GatewayConfig {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
     pub jwt_secret: String,
+    pub kanban_mcp_url: String,
     pub access_token_ttl_secs: u64,
     pub refresh_token_ttl_secs: u64,
 }
@@ -54,6 +55,7 @@ impl GatewayConfig {
         Self {
             data_dir,
             db_path,
+            kanban_mcp_url: "http://127.0.0.1:8080".into(),
             jwt_secret: "dev-insecure-default-secret-change-me".to_string(),
             access_token_ttl_secs: 900,
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
@@ -68,11 +70,21 @@ pub struct AppState {
     pub cli_runner: Arc<dyn CliRunner>,
     pub messenger: Arc<dyn MessengerTransport>,
     pub scheduler: Arc<chat::ExecutionScheduler>,
+    pub kanban_events: tokio::sync::broadcast::Sender<claude_web_ui_shared::kanban::KanbanCardDto>,
 }
 
 #[derive(Clone)]
 pub struct GatewayServer {
     state: AppState,
+    _kanban_worker: Arc<KanbanWorkerHandle>,
+}
+
+struct KanbanWorkerHandle(tokio::task::JoinHandle<()>);
+
+impl Drop for KanbanWorkerHandle {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl GatewayServer {
@@ -83,6 +95,11 @@ impl GatewayServer {
     ) -> Result<Self, ServerError> {
         std::fs::create_dir_all(&config.data_dir)?;
         let db = db::connect_sqlite_wal(&config.db_path).await?;
+        sqlx::query(
+            "UPDATE chat_turns SET status = 'error', error_message = 'Gateway restarted during the Kanban turn'
+             WHERE id IN (SELECT turn_id FROM kanban_cards WHERE active_run = 1)
+             AND status IN ('queued','running','waiting_approval')"
+        ).execute(&db).await?;
         let config_arc = Arc::new(config);
         let scheduler = Arc::new(chat::ExecutionScheduler::new(
             db.clone(),
@@ -95,8 +112,13 @@ impl GatewayServer {
             cli_runner,
             messenger,
             scheduler,
+            kanban_events: tokio::sync::broadcast::channel(128).0,
         };
-        Ok(Self { state })
+        let worker = kanban::start(state.clone());
+        Ok(Self {
+            state,
+            _kanban_worker: Arc::new(KanbanWorkerHandle(worker)),
+        })
     }
 
     pub fn router(&self) -> Router {
@@ -106,6 +128,7 @@ impl GatewayServer {
             .merge(accounts::router(self.state.clone()))
             .merge(workspace_files::router(self.state.clone()))
             .merge(chat::router(self.state.clone()))
+            .merge(kanban::router(self.state.clone()))
             .fallback(serve_embedded_ui)
             .layer(CorsLayer::permissive())
             .with_state(self.state.clone())
@@ -125,6 +148,12 @@ impl GatewayServer {
 
     pub fn messenger(&self) -> &Arc<dyn MessengerTransport> {
         &self.state.messenger
+    }
+
+    pub fn subscribe_kanban(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<claude_web_ui_shared::kanban::KanbanCardDto> {
+        self.state.kanban_events.subscribe()
     }
 
     pub fn scheduler(&self) -> &Arc<chat::ExecutionScheduler> {

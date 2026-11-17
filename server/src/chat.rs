@@ -373,6 +373,18 @@ impl ExecutionScheduler {
         &self,
         params: EnqueueTurnParams,
     ) -> Result<SendChatTurnResponse, AppError> {
+        self.enqueue_project_turn(params, None).await
+    }
+
+    pub(crate) async fn enqueue_kanban_turn(
+        &self, params: EnqueueTurnParams, card_id: &str,
+    ) -> Result<SendChatTurnResponse, AppError> {
+        self.enqueue_project_turn(params, Some(card_id)).await
+    }
+
+    async fn enqueue_project_turn(
+        &self, params: EnqueueTurnParams, card_id: Option<&str>,
+    ) -> Result<SendChatTurnResponse, AppError> {
         let prompt = params.prompt.trim().to_string();
         if prompt.is_empty() {
             return Err(AppError::bad_request("prompt cannot be empty"));
@@ -394,6 +406,8 @@ impl ExecutionScheduler {
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
+        let mut tx = self.db.begin().await?;
+
         sqlx::query(
             "INSERT INTO chat_turns (id, session_id, project_id, user_id, provider, account_id, prompt, status, events_json, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)",
@@ -407,14 +421,20 @@ impl ExecutionScheduler {
         .bind(&prompt)
         .bind(ChatTurnStatus::Queued.as_str())
         .bind(&now)
-        .execute(&self.db)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
             .bind(&now)
             .bind(&params.session_id)
-            .execute(&self.db)
+            .execute(&mut *tx)
             .await?;
+
+        if let Some(card_id) = card_id {
+            sqlx::query("UPDATE kanban_cards SET turn_id = ?, assigned_cli = ? WHERE id = ?")
+                .bind(&turn_id).bind(provider.as_str()).bind(card_id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
 
         let queue_position = {
             let mut guard = self.inner.lock().expect("scheduler mutex poisoned");
@@ -645,13 +665,25 @@ impl ExecutionScheduler {
         .await?;
 
         let adapter = adapter_for(effective_provider);
-        let invocation = adapter.build_invocation(&AdapterTurnRequest {
+        let mut invocation = adapter.build_invocation(&AdapterTurnRequest {
             prompt: job.prompt.clone(),
             resume_session_id: session.native_session_id.clone(),
             working_dir: PathBuf::from(&project_workspace),
             env,
             approval_mode: session.approval_mode,
         });
+
+        let _mcp_config = match crate::kanban::prepare_invocation(
+            &self.db, &job.project_id, &job.turn_id, &self._config.kanban_mcp_url, &mut invocation,
+        ).await {
+            Ok(config) => config,
+            Err(error) => {
+                sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ?")
+                    .bind(&error.message).bind(Utc::now().to_rfc3339()).bind(&job.turn_id)
+                    .execute(&self.db).await?;
+                return Err(error);
+            }
+        };
 
         let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
         let (approval_tx, approval_rx) = mpsc::unbounded_channel::<bool>();
@@ -880,6 +912,12 @@ impl ExecutionScheduler {
             }
         }
 
+        if let Err(error) = crate::kanban::record_diff(
+            &self.db, &job.turn_id, &project_workspace,
+        ).await {
+            tracing::warn!("Could not record Kanban git diff: {}", error.message);
+        }
+
         let completed_at = Utc::now().to_rfc3339();
         let events_json = serde_json::to_string(&events_acc).unwrap_or_else(|_| "[]".to_string());
         sqlx::query(
@@ -1065,7 +1103,7 @@ fn truncate_title(prompt: &str) -> String {
     out
 }
 
-async fn create_gateway_session(
+pub(crate) async fn create_gateway_session(
     db: &SqlitePool,
     project_id: &str,
     user_id: &str,

@@ -172,6 +172,43 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS kanban_cards (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            parent_id TEXT REFERENCES kanban_cards(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            lane TEXT NOT NULL CHECK(lane IN ('triage','ready','running','blocked','review','done','archived')),
+            position INTEGER NOT NULL,
+            assigned_cli TEXT,
+            create_git_branch INTEGER NOT NULL DEFAULT 0,
+            git_branch_name TEXT,
+            git_base TEXT,
+            git_diff TEXT,
+            session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+            turn_id TEXT REFERENCES chat_turns(id) ON DELETE SET NULL,
+            blocked_reason TEXT,
+            result_summary TEXT,
+            created_by TEXT NOT NULL REFERENCES users(id),
+            run_user_id TEXT REFERENCES users(id),
+            decompose INTEGER NOT NULL DEFAULT 0,
+            run_token TEXT,
+            active_run INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_kanban_project_lane
+            ON kanban_cards(project_id, lane, position);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_kanban_active_run
+            ON kanban_cards(active_run) WHERE active_run = 1;
+
+        CREATE TABLE IF NOT EXISTS kanban_dependencies (
+            card_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+            blocker_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+            PRIMARY KEY (card_id, blocker_id)
+        );
         "#,
     )
     .execute(pool)

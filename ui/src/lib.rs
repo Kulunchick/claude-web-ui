@@ -21,6 +21,7 @@ use leptos::prelude::*;
 #[component]
 pub fn GatewayApp(
     #[prop(default = true)] initialized: bool,
+    #[prop(optional)] access_token: Option<String>,
     #[prop(optional)] user: Option<UserDto>,
     #[prop(default = Vec::new())] initial_projects: Vec<ProjectDto>,
     #[prop(default = Vec::new())] initial_users: Vec<UserDto>,
@@ -63,6 +64,7 @@ pub fn GatewayApp(
         Some(current_user) => {
             let chat_user = current_user.clone();
             let current_role = current_user.role;
+            let kanban_token = StoredValue::new(access_token);
             view! {
                 <div class="dashboard-shell">
                     <ProjectSwitcherSidebar
@@ -89,6 +91,13 @@ pub fn GatewayApp(
                                                 active_session_id=active_session_id
                                                 turns=turns
                                             />
+                                            <kanban_view::KanbanView
+                                                project_id=proj_id.clone()
+                                                access_token=kanban_token.get_value().unwrap_or_default()
+                                                read_only={current_role == claude_web_ui_shared::auth::Role::Viewer}
+                                                open_session=Callback::new(move |id| active_session_id.set(Some(id)))
+                                            />
+
                                             <WorkspaceFilesGitView
                                                 project_id=proj_id
                                                 user_role=current_role

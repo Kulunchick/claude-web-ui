@@ -8,6 +8,11 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("mcp-kanban") {
+        return claude_web_ui_server::kanban::stdio_bridge(args).await;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
@@ -19,7 +24,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
         .parse()?;
 
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    let local_addr = listener.local_addr()?;
+    let loopback = if local_addr.is_ipv4() {
+        "127.0.0.1"
+    } else {
+        "[::1]"
+    };
     let mut config = GatewayConfig::for_data_dir(&data_dir);
+    config.kanban_mcp_url = std::env::var("CLAUDE_WEB_UI_MCP_URL")
+        .unwrap_or_else(|_| format!("http://{loopback}:{}", local_addr.port()));
     if let Ok(secret) = std::env::var("CLAUDE_WEB_UI_JWT_SECRET") {
         config.jwt_secret = secret;
     } else {
@@ -41,7 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     tracing::info!("claude-web-ui gateway listening on http://{}", bind_addr);
     axum::serve(listener, server.router()).await?;
     Ok(())

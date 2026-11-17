@@ -194,7 +194,7 @@
         }
         if (msg.session_id === state.activeSessionId) {
           await loadProjectSessions();
-          render();
+          if (state.projectTab === "chat") render();
         }
       } catch {}
     };
@@ -320,7 +320,7 @@
         return `
           <li>
             <button class="tree-node-btn" style="padding-left:${8 + pad}px" data-dir-toggle="${esc(node.path)}">
-              ${collapsed ? "▸ 📁" : "▾ 📂"} ${esc(node.name)}
+              ${collapsed ? "Ã¢â€“Â¸ Ã°Å¸â€œÂ" : "Ã¢â€“Â¾ Ã°Å¸â€œâ€š"} ${esc(node.name)}
             </button>
             ${collapsed ? "" : renderTreeNodes(node.children || [], depth + 1)}
           </li>`;
@@ -329,7 +329,7 @@
       return `
         <li>
           <button class="tree-node-btn ${isSelected ? "active" : ""}" style="padding-left:${8 + pad}px" data-file-open="${esc(node.path)}">
-            📄 ${esc(node.name)}
+            Ã°Å¸â€œâ€ž ${esc(node.name)}
           </button>
         </li>`;
     }).join("")}</ul>`;
@@ -523,7 +523,7 @@
     ).join("");
     const matchingAccounts = (cli.available_accounts || []).filter((a) => a.provider === cli.active_provider);
     const accountOptions = [
-      `<option value="">— Select account —</option>`,
+      `<option value="">Ã¢â‚¬â€ Select account Ã¢â‚¬â€</option>`,
       ...matchingAccounts.map((a) =>
         `<option value="${esc(a.id)}" ${cli.active_account_id === a.id ? "selected" : ""}>${esc(a.name)}</option>`
       ),
@@ -701,6 +701,187 @@
       </div>`;
   }
 
+
+  const kanbanColumns = ["triage", "ready", "running", "blocked", "review", "done", "archived"];
+  const kanban = { projectId: null, cards: [], editing: null, error: null };
+
+  function kanbanPath(projectId = state.activeProjectId) {
+    return `/api/projects/${encodeURIComponent(projectId)}/kanban`;
+  }
+
+  async function loadKanban() {
+    const projectId = state.activeProjectId;
+    if (!projectId) return;
+    const cards = await api(kanbanPath(projectId));
+    if (projectId !== state.activeProjectId || state.projectTab !== "kanban") return;
+    const changed = projectId !== kanban.projectId || JSON.stringify(cards) !== JSON.stringify(kanban.cards);
+    kanban.projectId = projectId;
+    kanban.cards = cards;
+    if (changed && !kanban.editing) render();
+  }
+
+  function renderKanban(readOnly) {
+    const cards = kanban.projectId === state.activeProjectId ? kanban.cards : [];
+    const card = cards.find((item) => item.id === kanban.editing);
+    const label = (value) => value[0].toUpperCase() + value.slice(1);
+    const options = (selected) => kanbanColumns.map((column) => `
+      <option value="${column}" ${column === selected ? "selected" : ""}>${label(column)}</option>
+    `).join("");
+    return `
+      <section class="panel-card kanban-panel">
+        <div class="pane-head">
+          <h2>Kanban</h2>
+          ${readOnly ? "" : '<button class="btn-primary" type="button" id="kanban-new">New card</button>'}
+        </div>
+        ${kanban.error ? `<p role="alert">${esc(kanban.error)}</p>` : ""}
+        ${!readOnly && kanban.editing ? `
+          <form id="kanban-form" class="kanban-form">
+            <label>Title <input name="title" value="${esc(card?.title)}" required></label>
+            <label>Description <textarea name="description">${esc(card?.description)}</textarea></label>
+            ${card ? "" : `<label>Column <select name="column">${options("triage")}</select></label>`}
+            <label>Depends on <select name="depends_on" multiple ${card?.column === "running" ? "disabled" : ""}>
+              ${cards.filter((item) => item.id !== card?.id).map((item) => `
+                <option value="${esc(item.id)}" ${card?.depends_on.includes(item.id) ? "selected" : ""}>${esc(item.title)}</option>`).join("")}
+            </select></label>
+            <label><input name="create_git_branch" type="checkbox" ${card?.create_git_branch ? "checked" : ""}> Create dedicated git branch</label>
+            <label>Branch name <input name="git_branch_name" value="${esc(card?.git_branch_name)}" placeholder="Generated if blank"></label>
+            <div><button type="submit" class="btn-primary">Save card</button>
+              <button type="button" class="btn-secondary" id="kanban-cancel">Cancel</button></div>
+          </form>` : ""}
+        <div class="kanban-board">
+          ${kanbanColumns.map((column) => `
+            <section class="kanban-lane" data-kanban-lane="${column}">
+              <h3>${label(column)}</h3>
+              ${cards.filter((card) => card.column === column).map((card, index) => `
+                <article class="kanban-card" data-kanban-card="${esc(card.id)}" data-kanban-index="${index}" draggable="${!readOnly}">
+                  ${card.session_id ? `<button class="kanban-title" type="button" data-kanban-session="${esc(card.session_id)}">${esc(card.title)}</button>` : `<strong>${esc(card.title)}</strong>`}
+                  ${card.description ? `<p>${esc(card.description)}</p>` : ""}
+                  ${card.unresolved_blockers.length ? `<p>Waiting on ${card.unresolved_blockers.map((id) => esc(cards.find((item) => item.id === id)?.title || id)).join(", ")}</p>` : ""}
+                  ${card.git_branch_name ? `<p>Branch <code>${esc(card.git_branch_name)}</code></p>` : ""}
+                  ${card.session_status ? `<p>CLI session ${esc(card.session_status.replaceAll("_", " "))}</p>` : ""}
+                  ${card.blocked_reason ? `<p>${esc(card.blocked_reason)}</p>` : ""}
+                  ${card.result_summary ? `<p>${esc(card.result_summary)}</p>` : ""}
+                  <div class="kanban-actions">
+                    ${card.session_id ? '<button type="button" class="btn-secondary" data-kanban-diff>Git diff</button>' : ""}
+                    ${readOnly ? "" : `
+                      <button type="button" class="btn-secondary" data-kanban-edit="${esc(card.id)}">Edit</button>
+                      ${column === "triage" ? `<button type="button" class="btn-secondary" data-kanban-decompose="${esc(card.id)}">Decompose with Agent</button>` : ""}
+                      <select aria-label="Move card" data-kanban-move="${esc(card.id)}">${options(column)}</select>`}
+                  </div>
+                </article>`).join("")}
+            </section>`).join("")}
+        </div>
+      </section>`;
+  }
+
+  function bindKanbanHandlers() {
+    const tab = document.getElementById("proj-tab-kanban");
+    if (tab) tab.onclick = async () => {
+      kanban.editing = null;
+      kanban.error = null;
+      state.projectTab = "kanban";
+      render();
+      try { await loadKanban(); } catch (error) { kanban.error = error.message; render(); }
+    };
+    const board = document.querySelector(".kanban-board");
+    if (!board) return;
+    const path = kanbanPath();
+    let dragging = null;
+    const mutate = async (suffix, method, value) => {
+      try {
+        kanban.error = null;
+        await api(path + suffix, { method, body: JSON.stringify(value) });
+        kanban.editing = null;
+        await loadKanban();
+      } catch (error) {
+        kanban.error = error.message;
+      }
+      render();
+    };
+    const move = (id, column, position) => mutate(`/${encodeURIComponent(id)}/move`, "POST", { column, position });
+    document.getElementById("kanban-new")?.addEventListener("click", () => { kanban.editing = "new"; render(); });
+    document.getElementById("kanban-cancel")?.addEventListener("click", () => { kanban.editing = null; render(); });
+    document.getElementById("kanban-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const value = {
+        title: form.get("title"),
+        description: form.get("description"),
+        create_git_branch: form.has("create_git_branch"),
+        git_branch_name: form.get("git_branch_name").trim() || null,
+      };
+      if (!event.currentTarget.elements.depends_on.disabled) value.depends_on = form.getAll("depends_on");
+      if (kanban.editing === "new") {
+        value.column = form.get("column");
+        void mutate("", "POST", value);
+      } else {
+        void mutate(`/${encodeURIComponent(kanban.editing)}`, "PATCH", value);
+      }
+    });
+    board.querySelectorAll("[data-kanban-edit]").forEach((button) => {
+      button.onclick = () => { kanban.editing = button.dataset.kanbanEdit; render(); };
+    });
+    board.querySelectorAll("[data-kanban-decompose]").forEach((button) => {
+      button.onclick = () => mutate(`/${encodeURIComponent(button.dataset.kanbanDecompose)}/decompose`, "POST", {});
+    });
+    board.querySelectorAll("[data-kanban-session]").forEach((button) => {
+      button.onclick = async () => {
+        state.activeSessionId = button.dataset.kanbanSession;
+        state.projectTab = "chat";
+        await loadProjectSessions();
+        render();
+      };
+    });
+    board.querySelectorAll("[data-kanban-diff]").forEach((button) => {
+      button.onclick = async () => {
+        try {
+          const id = button.closest("[data-kanban-card]").dataset.kanbanCard;
+          const result = await api(path + "/" + encodeURIComponent(id) + "/diff");
+          const dialog = document.createElement("dialog");
+          const heading = document.createElement("h3");
+          heading.textContent = "Card git diff";
+          const diff = document.createElement("pre");
+          diff.textContent = result.unified === null ? "No diff recorded." : result.unified || "No tracked file changes.";
+          const close = document.createElement("button");
+          close.type = "button";
+          close.textContent = "Close";
+          close.onclick = () => dialog.close();
+          dialog.addEventListener("close", () => dialog.remove(), { once: true });
+          dialog.append(heading, diff, close);
+          document.body.appendChild(dialog);
+          dialog.showModal();
+        } catch (error) {
+          kanban.error = error.message;
+          render();
+        }
+      };
+    });
+    board.querySelectorAll("[data-kanban-move]").forEach((select) => {
+      select.onchange = () => move(select.dataset.kanbanMove, select.value);
+    });
+    board.querySelectorAll(".kanban-card[draggable=true]").forEach((card) => {
+      card.ondragstart = (event) => {
+        dragging = card;
+        event.dataTransfer.setData("text/plain", card.dataset.kanbanCard);
+        event.dataTransfer.effectAllowed = "move";
+      };
+      card.ondragend = () => { dragging = null; };
+    });
+    board.querySelectorAll("[data-kanban-lane]").forEach((lane) => {
+      lane.ondragover = (event) => { if (dragging) event.preventDefault(); };
+      lane.ondrop = (event) => {
+        if (!dragging) return;
+        event.preventDefault();
+        const target = event.target.closest("[data-kanban-card]");
+        if (target === dragging) return;
+        let position = target ? Number(target.dataset.kanbanIndex) : undefined;
+        if (target && dragging.parentNode === lane && Number(dragging.dataset.kanbanIndex) < position) position -= 1;
+        void move(dragging.dataset.kanbanCard, lane.dataset.kanbanLane, position);
+        dragging = null;
+      };
+    });
+  }
+
   function renderDashboard() {
     closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
@@ -731,7 +912,7 @@
       `).join("");
       const invitesHtml = state.adminInvites.map((inv) => `
         <div class="row">
-          <div><code>${esc(inv.code)}</code> — ${esc(inv.role)}</div>
+          <div><code>${esc(inv.code)}</code> Ã¢â‚¬â€ ${esc(inv.role)}</div>
           <span>${inv.used_by ? "Used" : "Available"}</span>
         </div>
       `).join("");
@@ -870,8 +1051,9 @@
         <div class="tab-bar" style="margin:0;">
           <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
           <button class="btn-secondary ${state.projectTab === "files" ? "active" : ""}" id="proj-tab-files" type="button">Files &amp; Git</button>
+          <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
         </div>
-        ${state.projectTab === "files" ? filesGitHtml : renderProjectWorkspace(activeProject)}
+        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? renderKanban(readOnly) : renderProjectWorkspace(activeProject)}
       `;
     }
 
@@ -951,7 +1133,7 @@
           </div>
           <div class="subtitle" style="margin:0;font-size:0.78rem;">
             <span>${esc(s.source)}</span>
-            ${s.native_session_id ? ` • <code>${esc(s.native_session_id)}</code>` : ""}
+            ${s.native_session_id ? ` Ã¢â‚¬Â¢ <code>${esc(s.native_session_id)}</code>` : ""}
           </div>
         </button>
       </li>
@@ -1138,9 +1320,11 @@
   }
 
   function bindDashboardHandlers() {
+    bindKanbanHandlers();
     document.querySelectorAll("[data-pid]").forEach((btn) => {
       btn.onclick = async () => {
         state.activeProjectId = btn.dataset.pid;
+        state.projectTab = "chat";
         state.activeSessionId = null;
         state.tab = "overview";
         state.activeFile = null;
@@ -1614,5 +1798,6 @@
     });
   }
 
+  setInterval(() => { if (state.projectTab === "kanban" && state.user && !kanban.editing && !document.querySelector(".kanban-card:active")) void loadKanban().catch(() => {}); }, 1500);
   boot();
 })();

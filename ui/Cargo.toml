@@ -9,3 +9,6 @@ claude-web-ui-shared = { path = "../shared" }
 leptos = { version = "0.8", features = ["csr"] }
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-net = "0.6"
