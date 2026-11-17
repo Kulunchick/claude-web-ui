@@ -1,3 +1,4 @@
+pub(crate) mod handoff;
 mod process_tree;
 mod transcript;
 
@@ -700,13 +701,11 @@ impl ExecutionScheduler {
             if should_skip {
                 continue;
             }
-            let cron_turn_id = job.cron_target.as_ref().map(|_| job.turn_id.clone());
+            let turn_id = job.turn_id.clone();
             if let Err(err) = self.execute_single_turn(job).await {
-                if let Some(turn_id) = cron_turn_id {
-                    let _ = sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ? AND completed_at IS NULL")
-                        .bind(&err.message).bind(Utc::now().to_rfc3339()).bind(turn_id)
-                        .execute(&self.db).await;
-                }
+                let _ = sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ? AND completed_at IS NULL")
+                    .bind(&err.message).bind(Utc::now().to_rfc3339()).bind(turn_id)
+                    .execute(&self.db).await;
                 tracing::error!("execution scheduler turn failure: {:?}", err);
             }
         }
@@ -754,6 +753,7 @@ impl ExecutionScheduler {
             }
         }
 
+        let prompt = handoff::first_prompt(&self.db, &session, job.prompt, job.authorize_actor.as_deref()).await?;
         let started_at = Utc::now().to_rfc3339();
         sqlx::query(
             "UPDATE chat_turns SET status = ?, account_id = ?, started_at = ? WHERE id = ?",
@@ -767,7 +767,7 @@ impl ExecutionScheduler {
 
         let adapter = adapter_for(effective_provider);
         let mut invocation = adapter.build_invocation(&AdapterTurnRequest {
-            prompt: job.prompt.clone(),
+            prompt,
             resume_session_id: session.native_session_id.clone(),
             working_dir: PathBuf::from(&project_workspace),
             env,
@@ -1176,6 +1176,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(resolve_permission_handler),
         )
         .route("/api/projects/{project_id}/scheduler", get(get_scheduler_status))
+        .route(
+            "/api/projects/{project_id}/sessions/{session_id}/handoff",
+            post(handoff::post),
+        )
         .route("/api/projects/{project_id}/chat/ws", get(chat_ws_handler))
         .route(
             "/api/projects/{project_id}/sessions/{session_id}/transcript/ws",

@@ -183,6 +183,11 @@ pub struct CreateChatSessionRequest {
     pub approval_mode: Option<ApprovalMode>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffChatSessionRequest {
+    pub provider: CliProvider,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateChatSessionRequest {
     pub title: Option<String>,

@@ -1008,6 +1008,134 @@ async fn native_jsonl_session_discovery_and_cross_account_resume_continuity() {
 }
 
 #[tokio::test]
+async fn provider_handoff_carries_completed_history_and_resumes_new_native_session() {
+    let h = TestHarness::new().await;
+    let admin = h.bootstrap_admin().await;
+    let project = h.create_project(&admin.access_token, "Provider Handoff").await;
+    let sessions = format!("/api/projects/{}/sessions", project.id);
+    let token = Some(admin.access_token.as_str());
+    let claude = h.create_account(&admin.access_token, CliProvider::ClaudeCode, "Source Claude").await;
+    let codex = h.create_account(&admin.access_token, CliProvider::Codex, "Target Codex").await;
+    for account in [&claude, &codex] {
+        let (status, _) = h.request_json(
+            Method::PUT, &format!("/api/projects/{}/cli", project.id), token,
+            Some(json!({ "provider": account.provider, "account_id": account.id })),
+        ).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, source) = h.request_json(
+        Method::POST, &sessions, token, Some(json!({ "provider": "claude_code" })),
+    ).await;
+    let source: ChatSessionDto = TestHarness::decode(source).await;
+
+    h.cli_runner.push_turn(vec![TurnEvent::TurnComplete {
+        session_id: Some("claude-origin".into()),
+        result_text: "The migration should preserve archived rows.".into(),
+    }]);
+    let (status, _) = h.request_json(
+        Method::POST, &format!("{sessions}/{}/turns", source.id), token,
+        Some(json!({ "prompt": "Review the migration." })),
+    ).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_for_turn_status(&h, &format!("{sessions}/{}", source.id), token, ChatTurnStatus::Completed).await;
+
+    let (status, target) = h.request_json(
+        Method::POST, &format!("{sessions}/{}/handoff", source.id), token,
+        Some(json!({ "provider": "codex" })),
+    ).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let target: ChatSessionDto = TestHarness::decode(target).await;
+    assert_eq!(target.provider, CliProvider::Codex);
+    assert_ne!(target.id, source.id);
+    assert!(target.native_session_id.is_none());
+
+    let other = h.create_project(&admin.access_token, "Unrelated Project").await;
+    let (status, _) = h.request_json(
+        Method::POST, &format!("/api/projects/{}/sessions/{}/handoff", other.id, source.id),
+        token, Some(json!({ "provider": "codex" })),
+    ).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let developer = h.invite_and_redeem(
+        &admin.access_token, "developer", "target-only", vec![project.id.clone()],
+    ).await;
+    let (status, _) = h.request_json(
+        Method::PUT, &format!("/api/admin/projects/{}/members/{}/accounts", project.id, developer.user.id),
+        token, Some(json!({ "allowed_accounts": [codex.id] })),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let restricted = Some(developer.access_token.as_str());
+    let (status, _) = h.request_json(
+        Method::POST, &format!("{sessions}/{}/handoff", source.id),
+        restricted, Some(json!({ "provider": "codex" })),
+    ).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let target_path = format!("{sessions}/{}", target.id);
+    let (status, _) = h.request_json(
+        Method::POST, &format!("{target_path}/turns"), restricted,
+        Some(json!({ "prompt": "Attempt to use the source history." })),
+    ).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_for_turn_status(&h, &target_path, restricted, ChatTurnStatus::Error).await;
+    assert_eq!(h.cli_runner.recorded_invocations().len(), 1);
+
+    h.cli_runner.push_turn(vec![TurnEvent::TurnComplete {
+        session_id: Some("codex-continuation".into()),
+        result_text: "I can add a regression test.".into(),
+    }]);
+    let (status, _) = h.request_json(
+        Method::POST, &format!("{target_path}/turns"), token,
+        Some(json!({ "prompt": "Add that regression test." })),
+    ).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_for_turn_status(&h, &target_path, token, ChatTurnStatus::Completed).await;
+    let invocations = h.cli_runner.recorded_invocations();
+    let first_handoff = &invocations[1];
+    assert_eq!(first_handoff.provider, CliProvider::Codex);
+    assert!(!first_handoff.args.iter().any(|arg| arg == "claude-origin"));
+    let prompt = first_handoff.args.last().unwrap();
+    assert!(prompt.contains("Review the migration."));
+    assert!(prompt.contains("The migration should preserve archived rows."));
+    assert!(prompt.contains("Add that regression test."));
+
+    let (status, _) = h.request_json(
+        Method::POST, &format!("{target_path}/turns"), token,
+        Some(json!({ "prompt": "Report the result." })),
+    ).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(invocation) = h.cli_runner.recorded_invocations().get(2) {
+                assert!(invocation.args.windows(2).any(|pair| pair == ["resume", "codex-continuation"]));
+                assert_eq!(invocation.args.last().unwrap(), "Report the result.");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+}
+
+async fn wait_for_turn_status(
+    h: &TestHarness,
+    session_path: &str,
+    token: Option<&str>,
+    expected: ChatTurnStatus,
+) {
+    use std::time::Duration;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let (status, result) = h.request_json(Method::GET, session_path, token, None).await;
+            assert_eq!(status, StatusCode::OK);
+            let detail: ChatSessionDetailDto = TestHarness::decode(result).await;
+            if detail.turns.last().is_some_and(|turn| turn.status == expected) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("CLI turn reached the expected status");
+}
+
+#[tokio::test]
 async fn interactive_approval_pauses_turn_and_resolves_via_allow_and_deny() {
     let h = TestHarness::new().await;
     let admin = h.bootstrap_admin().await;

@@ -786,18 +786,7 @@ async fn switch_cli(
     .await?;
     if let Some(session) = current.filter(|session| session.provider != provider) {
         if session.native_session_id.is_some() || has_turns(state, &session.id).await? {
-            let replacement = chat::create_gateway_session(
-                &state.db,
-                &ctx.project.id,
-                &ctx.user.user.id,
-                CreateChatSessionRequest {
-                    title: Some(format!("{} ({})", session.title, provider.display_name())),
-                    provider: Some(provider),
-                    native_session_id: None,
-                    approval_mode: Some(session.approval_mode),
-                },
-            )
-            .await?;
+            let replacement = chat::handoff::create(state, ctx, &session.id, provider).await?;
             select_session(state, dest, &ctx.project.id, &replacement.id).await?;
         } else {
             sqlx::query(

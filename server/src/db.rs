@@ -173,6 +173,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
         CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_id, created_at);
 
+        CREATE TABLE IF NOT EXISTS chat_session_handoffs (
+            session_id TEXT PRIMARY KEY REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            source_session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+            context_json TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS kanban_cards (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

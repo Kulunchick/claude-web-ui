@@ -11,7 +11,11 @@ use axum::{
 };
 use claude_web_ui_shared::{accounts::CliProvider, chat::NativeTranscriptEntryDto};
 use serde_json::json;
-use std::{io, path::PathBuf, time::Duration};
+use std::{
+    io,
+    path::{Path as StdPath, PathBuf},
+    time::Duration,
+};
 use tokio::{
     fs::{self, File},
     io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -69,6 +73,30 @@ async fn open_transcript(root: PathBuf, path: PathBuf) -> io::Result<File> {
         ));
     }
     Ok(file)
+}
+
+pub(super) async fn read_recent(
+    data_dir: &StdPath,
+    provider: CliProvider,
+    path: &str,
+) -> io::Result<Vec<NativeTranscriptEntryDto>> {
+    const LIMIT: u64 = 512 * 1024;
+    let root = data_dir.join("shared").join(provider.as_str());
+    let mut file = open_transcript(root, PathBuf::from(path)).await?;
+    let len = file.metadata().await?.len();
+    let start = len.saturating_sub(LIMIT);
+    file.seek(SeekFrom::Start(start)).await?;
+    let mut bytes = Vec::new();
+    file.take(LIMIT).read_to_end(&mut bytes).await?;
+    let bytes = if start == 0 {
+        &bytes[..]
+    } else {
+        bytes
+            .splitn(2, |byte| *byte == b'\n')
+            .nth(1)
+            .unwrap_or_default()
+    };
+    Ok(parse_native_jsonl_records(&String::from_utf8_lossy(bytes)))
 }
 
 struct Tail {
