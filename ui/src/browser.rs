@@ -184,6 +184,17 @@ pub fn mount_admin(
 }
 
 #[wasm_bindgen]
+pub fn mount_agents_skills_mcp(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
+    let state: crate::asm_workspace_view::AsmWorkspaceState =
+        serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        view! { <crate::asm_workspace_view::AgentsSkillsMcpWorkspace state=state /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+#[wasm_bindgen]
 pub fn mount_files_git(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
     let state: crate::files_git_view::WorkspaceBrowserState =
         serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;

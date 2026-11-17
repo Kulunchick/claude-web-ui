@@ -919,11 +919,27 @@ async fn embedded_ui_serves_agents_skills_mcp_manager_and_presets() {
     assert_eq!(js_resp.status(), StatusCode::OK);
     let js_bytes = js_resp.into_body().collect().await.unwrap().to_bytes();
     let js = String::from_utf8_lossy(&js_bytes);
-    assert!(js.contains("Agents, Skills &amp; MCP") || js.contains("Agents, Skills & MCP"));
-    assert!(js.contains("Share Skill across CLIs"));
-    assert!(js.contains("graphify-mcp"));
-    assert!(js.contains("chrome-devtools"));
-    assert!(js.contains("Run Graphify Index"));
+    assert!(js.contains("leptos.mount_agents_skills_mcp"));
     assert!(js.contains("/mcp/graphify/index"));
     assert!(js.contains("raw_markdown"));
+
+    let wasm_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/leptos_gateway_bg.wasm")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wasm_resp.status(), StatusCode::OK);
+    let wasm_bytes = wasm_resp.into_body().collect().await.unwrap().to_bytes();
+    let wasm = String::from_utf8_lossy(&wasm_bytes);
+    assert!(wasm.contains("Agents, Skills &amp; MCP Manager"));
+    assert!(wasm.contains("Share Skill across CLIs"));
+    assert!(wasm.contains("graphify-mcp"));
+    assert!(wasm.contains("chrome-devtools"));
+    assert!(wasm.contains("Run Graphify Index"));
 }

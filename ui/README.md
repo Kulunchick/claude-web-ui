@@ -5,9 +5,9 @@ dashboard window loads the selected Gateway's copy of the same frontend.
 
 The Leptos CSR views in `ui/src/browser.rs` mount the sign-in, first administrator,
 invite redemption, project selection, project CLI and account switching, Kanban,
-Cron, file and Git browsing, and the Users and Projects administration tab.
-JavaScript handles the chat and terminal views, CLI accounts administration,
-and Agents, Skills, and MCP.
+Cron, file and Git browsing, Agents, Skills, and MCP, and the Users and Projects
+administration tab.
+JavaScript handles the chat and terminal views and CLI accounts administration.
 
 When editing a Leptos view or updating wasm-bindgen, rebuild the browser assets
 from the workspace root. Use the `wasm-bindgen-cli` version that matches the

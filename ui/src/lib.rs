@@ -3,6 +3,7 @@ mod browser;
 
 pub mod accounts_view;
 pub mod agents_skills_mcp_view;
+pub mod asm_workspace_view;
 pub mod auth_view;
 pub mod chat_view;
 pub mod cron_view;

@@ -5,21 +5,6 @@
     antigravity: "Antigravity",
   };
 
-  const PROVIDER_MODEL_TIERS = {
-    claude_code: ["opus", "sonnet", "haiku", "inherit"],
-    codex: ["gpt-5-codex", "o3", "o4-mini", "codex-mini", "inherit"],
-    antigravity: ["pro", "flash", "flash_lite", "inherit"],
-  };
-
-  const CLAUDE_TOOLS = [
-    "Read", "Edit", "Write", "MultiEdit", "Bash", "Grep", "Glob", "LS",
-    "WebFetch", "WebSearch", "Task", "TodoWrite",
-  ];
-
-  const PERMISSION_MODES = [
-    "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk",
-  ];
-
   const desktop = Object.hasOwn(window, "__CWU_DESKTOP_ACCESS_TOKEN");
 
   const state = {
@@ -769,7 +754,7 @@
     } else if (state.tab === "accounts" && isAdmin) {
       mainHtml = renderAccountsTab();
     } else if (state.tab === "agents_skills_mcp") {
-      mainHtml = renderAgentsSkillsMcpTab();
+      mainHtml = '<div id="asm-workspace"></div>';
     } else if (!activeProject) {
       mainHtml = `
         <section class="panel-card">
@@ -845,6 +830,24 @@
         git_diff: state.gitDiff,
         diff_mode: state.diffMode,
         diff_path: state.diffPath,
+      }));
+    }
+    const asm = document.getElementById("asm-workspace");
+    if (asm) {
+      leptos.mount_agents_skills_mcp(asm, JSON.stringify({
+        provider: state.asmProvider,
+        scope: state.asmScope,
+        sub_tab: state.asmSubTab,
+        has_project: Boolean(state.activeProjectId),
+        can_edit: asmCanMutate(),
+        raw_mode: state.asmRawMode,
+        agents: state.asmAgents,
+        selected_agent: state.asmSelectedAgent,
+        skills: state.asmSkills,
+        selected_skill: state.asmSelectedSkill,
+        mcp_config: state.asmMcpConfig,
+        presets: state.asmPresets,
+        graphify_result: state.asmGraphifyResult,
       }));
     }
     const admin = document.getElementById("admin-workspace");
@@ -1126,208 +1129,6 @@
     } catch (err) {
       state.error = err.message;
     }
-  }
-
-  function renderAgentsSkillsMcpTab() {
-    const canEdit = asmCanMutate();
-    const readOnlyAttr = canEdit ? "" : "disabled";
-    const provTabs = Object.entries(PROVIDER_LABELS).map(([k, label]) => `
-      <button class="btn-secondary ${state.asmProvider === k ? "active" : ""}" data-asm-prov="${esc(k)}" type="button">${esc(label)}</button>
-    `).join("");
-
-    let bodyHtml = "";
-    if (state.asmScope === "project" && !state.activeProjectId) {
-      bodyHtml = `<div class="panel-card"><p class="subtitle">Select a project from the sidebar or switch to Global Scope.</p></div>`;
-    } else if (state.asmSubTab === "agents") {
-      const sel = state.asmSelectedAgent || {
-        name: "",
-        description: "",
-        model: PROVIDER_MODEL_TIERS[state.asmProvider][0],
-        tools: ["Read", "Grep"],
-        disallowed_tools: [],
-        permission_mode: "default",
-        system_prompt: "",
-        raw_markdown: "---\nname: \ndescription: \nmodel: " + PROVIDER_MODEL_TIERS[state.asmProvider][0] + "\n---\n",
-      };
-      const agentRows = state.asmAgents.map((a) => `
-        <div class="row">
-          <div>
-            <strong>${esc(a.name)}</strong>
-            <span class="role-badge">${esc(a.model || "inherit")}</span>
-            <p class="subtitle">${esc(a.description || "")}</p>
-          </div>
-          <div class="btn-group">
-            <button class="btn-secondary" data-asm-edit-agent="${esc(a.name)}" type="button">Edit</button>
-            ${canEdit ? `<button class="btn-danger" data-asm-del-agent="${esc(a.name)}" type="button">Delete</button>` : ""}
-          </div>
-        </div>
-      `).join("");
-
-      const modelOptions = PROVIDER_MODEL_TIERS[state.asmProvider].map((m) =>
-        `<option value="${esc(m)}" ${sel.model === m ? "selected" : ""}>${esc(m)}</option>`
-      ).join("");
-      const permOptions = PERMISSION_MODES.map((m) =>
-        `<option value="${esc(m)}" ${sel.permission_mode === m ? "selected" : ""}>${esc(m)}</option>`
-      ).join("");
-      const toolChecks = CLAUDE_TOOLS.map((t) => {
-        const chk = (sel.tools || []).includes(t) ? "checked" : "";
-        return `<label class="checkbox-item"><input type="checkbox" name="asm_tools" value="${esc(t)}" ${chk} ${readOnlyAttr} /> ${esc(t)}</label>`;
-      }).join("");
-
-      const editorFields = state.asmRawMode
-        ? `
-          <div class="form-group">
-            <label>Raw Markdown + YAML Frontmatter</label>
-            <textarea id="asm-agent-raw" name="raw_markdown" rows="12" ${readOnlyAttr}>${esc(sel.raw_markdown || "")}</textarea>
-          </div>`
-        : `
-          <div class="form-group"><label>Description</label><input id="asm-agent-desc" value="${esc(sel.description || "")}" ${readOnlyAttr} /></div>
-          <div class="form-group"><label>Model Tier</label><select id="asm-agent-model" ${readOnlyAttr}>${modelOptions}</select></div>
-          <div class="form-group"><label>Allowed Tools</label><div class="checkbox-list">${toolChecks}</div></div>
-          <div class="form-group"><label>Disallowed Tools (comma-separated)</label><input id="asm-agent-disallowed" value="${esc((sel.disallowed_tools || []).join(", "))}" ${readOnlyAttr} /></div>
-          <div class="form-group"><label>Permission Mode</label><select id="asm-agent-perm" ${readOnlyAttr}>${permOptions}</select></div>
-          <div class="form-group"><label>System Prompt</label><textarea id="asm-agent-prompt" rows="6" ${readOnlyAttr}>${esc(sel.system_prompt || "")}</textarea></div>`;
-
-      bodyHtml = `
-        <div class="admin-grid">
-          <div class="panel-card">
-            <h3>Configured Subagents (${esc(PROVIDER_LABELS[state.asmProvider])})</h3>
-            ${agentRows || "<p class='subtitle'>No subagents found in this scope.</p>"}
-          </div>
-          <form class="panel-card" id="asm-agent-form">
-            <div class="panel-header-row">
-              <h3>Subagent Editor</h3>
-              <button class="btn-secondary" id="asm-toggle-raw-btn" type="button">${state.asmRawMode ? "Visual Form" : "Raw YAML / Markdown"}</button>
-            </div>
-            <div class="form-group"><label>Agent Name</label><input id="asm-agent-name" value="${esc(sel.name || "")}" required ${readOnlyAttr} /></div>
-            ${editorFields}
-            ${canEdit ? `<button class="btn-primary" type="submit">Save Subagent</button>` : `<p class="subtitle">Read-only access in this scope.</p>`}
-          </form>
-        </div>`;
-    } else if (state.asmSubTab === "skills") {
-      const sel = state.asmSelectedSkill || {
-        name: "",
-        skill_md: "---\nname: \ndescription: \n---\n# Instructions\n",
-        companion_files: [],
-        is_shared: false,
-      };
-      const skillRows = state.asmSkills.map((s) => `
-        <div class="row">
-          <div>
-            <strong>${esc(s.name)}</strong>
-            ${s.is_shared ? `<span class="role-badge">Shared</span>` : ""}
-            <p class="subtitle">${esc(s.description || "")}</p>
-          </div>
-          <div class="btn-group">
-            <button class="btn-secondary" data-asm-edit-skill="${esc(s.name)}" type="button">Edit</button>
-            ${canEdit ? `<button class="btn-secondary" data-asm-share-skill="${esc(s.name)}" data-shared="${s.is_shared ? "true" : "false"}" type="button">${s.is_shared ? "Unshare" : "Share"}</button>` : ""}
-            ${canEdit ? `<button class="btn-danger" data-asm-del-skill="${esc(s.name)}" type="button">Delete</button>` : ""}
-          </div>
-        </div>
-      `).join("");
-
-      const compRows = (sel.companion_files || []).map((c) => `
-        <div class="row">
-          <code>${esc(c.relative_path)}</code>
-          ${canEdit && sel.name ? `<button class="btn-danger" data-asm-del-comp="${esc(c.relative_path)}" type="button">Remove</button>` : ""}
-        </div>
-      `).join("");
-
-      bodyHtml = `
-        <div class="admin-grid">
-          <div class="panel-card">
-            <h3>Skills (${esc(PROVIDER_LABELS[state.asmProvider])})</h3>
-            ${skillRows || "<p class='subtitle'>No skills found in this scope.</p>"}
-          </div>
-          <div class="panel-card">
-            <form id="asm-skill-form">
-              <h3>Skill &amp; Companion Editor</h3>
-              <div class="form-group"><label>Skill Name</label><input id="asm-skill-name" value="${esc(sel.name || "")}" required ${readOnlyAttr} /></div>
-              <label class="checkbox-item" style="margin-bottom: 10px;">
-                <input type="checkbox" id="asm-skill-share-toggle" ${sel.is_shared ? "checked" : ""} ${readOnlyAttr} />
-                Share Skill across CLIs
-              </label>
-              <div class="form-group"><label>SKILL.md</label><textarea id="asm-skill-md" rows="8" ${readOnlyAttr}>${esc(sel.skill_md || "")}</textarea></div>
-              ${canEdit ? `<button class="btn-primary" type="submit">Save Skill</button>` : ""}
-            </form>
-            <div style="margin-top: 16px;">
-              <h4>Companion Files (scripts/, references/, examples/)</h4>
-              ${compRows || "<p class='subtitle'>No companion files yet.</p>"}
-              ${canEdit ? `
-                <form id="asm-comp-form" style="margin-top: 10px;">
-                  <div class="form-group"><label>Relative Path</label><input id="asm-comp-path" value="scripts/helper.sh" required /></div>
-                  <div class="form-group"><label>Content</label><textarea id="asm-comp-content" rows="4"></textarea></div>
-                  <button class="btn-secondary" type="submit">Save Companion File</button>
-                </form>` : ""}
-            </div>
-          </div>
-        </div>`;
-    } else {
-      const cfg = state.asmMcpConfig || { config_path: "", servers: [] };
-      const srvRows = (cfg.servers || []).map((s) => `
-        <div class="row">
-          <div>
-            <strong>${esc(s.name)}</strong>
-            <div class="project-path"><code>${esc(s.command || s.url || "")} ${esc((s.args || []).join(" "))}</code></div>
-          </div>
-          <div class="btn-group">
-            ${canEdit ? `<button class="btn-secondary" data-asm-sync-mcp="${esc(s.name)}" type="button">Sync across CLIs</button>` : ""}
-            ${canEdit ? `<button class="btn-danger" data-asm-del-mcp="${esc(s.name)}" type="button">Delete</button>` : ""}
-          </div>
-        </div>
-      `).join("");
-
-      const presetButtons = (state.asmPresets.length > 0 ? state.asmPresets : [
-        { id: "graphify-mcp", display_name: "Graphify Knowledge Graph (graphify-mcp)" },
-        { id: "chrome-devtools", display_name: "Chrome DevTools MCP" },
-        { id: "playwright", display_name: "Playwright Browser MCP" },
-      ]).map((p) => `
-        <button class="btn-secondary" data-asm-preset="${esc(p.id)}" type="button" ${readOnlyAttr}>+ ${esc(p.display_name)}</button>
-      `).join("");
-
-      bodyHtml = `
-        <div class="admin-grid">
-          <div class="panel-card">
-            <div class="panel-header-row">
-              <h3>Native MCP Servers</h3>
-              ${state.asmScope === "project" && canEdit ? `<button class="btn-secondary" id="asm-run-graphify-btn" type="button">Run Graphify Index</button>` : ""}
-            </div>
-            <p class="project-path">${esc(cfg.config_path || "")}</p>
-            ${srvRows || "<p class='subtitle'>No MCP servers configured yet.</p>"}
-            <h4 style="margin-top: 14px;">One-Click Presets</h4>
-            <div class="btn-group">${presetButtons}</div>
-            ${state.asmGraphifyResult ? `<pre class="xterm-fallback-log" style="margin-top: 12px;">${esc(state.asmGraphifyResult)}</pre>` : ""}
-          </div>
-          <form class="panel-card" id="asm-mcp-form">
-            <h3>Add / Update MCP Server</h3>
-            <div class="form-group"><label>Server Name</label><input id="asm-mcp-name" placeholder="my-mcp" required ${readOnlyAttr} /></div>
-            <div class="form-group"><label>Command</label><input id="asm-mcp-cmd" placeholder="npx" ${readOnlyAttr} /></div>
-            <div class="form-group"><label>Args (space-separated)</label><input id="asm-mcp-args" placeholder="-y @playwright/mcp@latest" ${readOnlyAttr} /></div>
-            ${canEdit ? `<button class="btn-primary" type="submit">Save MCP Server</button>` : ""}
-          </form>
-        </div>`;
-    }
-
-    return `
-      <section class="panel-card">
-        <div class="panel-header-row">
-          <div>
-            <h2>Agents, Skills &amp; MCP Manager</h2>
-            <p class="subtitle">Native CLI subagents, skills with cross-CLI symlink sharing, and MCP presets.</p>
-          </div>
-          <div class="tab-bar">
-            <button class="btn-secondary ${state.asmScope === "project" ? "active" : ""}" data-asm-scope="project" type="button">Project Scope</button>
-            <button class="btn-secondary ${state.asmScope === "global" ? "active" : ""}" data-asm-scope="global" type="button">Global Scope</button>
-          </div>
-        </div>
-        <div class="tab-bar">${provTabs}</div>
-        <div class="tab-bar">
-          <button class="btn-secondary ${state.asmSubTab === "agents" ? "active" : ""}" data-asm-sub="agents" type="button">Subagents</button>
-          <button class="btn-secondary ${state.asmSubTab === "skills" ? "active" : ""}" data-asm-sub="skills" type="button">Skills</button>
-          <button class="btn-secondary ${state.asmSubTab === "mcp" ? "active" : ""}" data-asm-sub="mcp" type="button">MCP Servers</button>
-        </div>
-      </section>
-      ${bodyHtml}`;
   }
 
   function bindDashboardHandlers() {
