@@ -1,3 +1,5 @@
-//! Tauri v2 desktop shell crate (implemented in Ticket #8).
+mod profiles;
+mod tray;
 
-pub use claude_web_ui_shared as shared;
+pub use profiles::{GatewayProfile, GatewayProfiles, ProfileError};
+pub use tray::{Notice, StopTarget, TrayState};

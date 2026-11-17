@@ -1,0 +1,13 @@
+{
+  "identifier": "profiles",
+  "description": "Local desktop profile settings",
+  "windows": ["profiles"],
+  "permissions": [
+    "allow-profiles",
+    "allow-add-profile",
+    "allow-select-profile",
+    "allow-save-credentials",
+    "allow-sign-in",
+    "allow-open-dashboard"
+  ]
+}

@@ -1,3 +1,8 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod desktop_app;
+mod gateway;
+
 fn main() {
-    println!("claude-web-ui-desktop placeholder (implemented in Ticket #8)");
+    desktop_app::run();
 }

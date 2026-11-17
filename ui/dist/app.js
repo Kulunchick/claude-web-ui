@@ -5,11 +5,13 @@
     antigravity: "Antigravity",
   };
 
+  const desktop = Object.hasOwn(window, "__CWU_DESKTOP_ACCESS_TOKEN");
+
   const state = {
     initialized: true,
     screen: "login",
-    accessToken: localStorage.getItem("cwu_access_token") || null,
-    refreshToken: localStorage.getItem("cwu_refresh_token") || null,
+    accessToken: desktop ? window.__CWU_DESKTOP_ACCESS_TOKEN : localStorage.getItem("cwu_access_token"),
+    refreshToken: desktop ? null : localStorage.getItem("cwu_refresh_token"),
     user: null,
     projects: [],
     activeProjectId: null,
@@ -50,6 +52,17 @@
 
   const app = document.getElementById("app");
 
+  if (desktop) {
+    window.addEventListener("cwu:desktop-token", () => {
+      state.accessToken = window.__CWU_DESKTOP_ACCESS_TOKEN;
+      if (state.user) {
+        connectChatStream(state.activeProjectId);
+      } else {
+        boot();
+      }
+    });
+  }
+
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
     if (state.accessToken) {
@@ -88,8 +101,10 @@
     state.accessToken = auth.access_token;
     state.refreshToken = auth.refresh_token;
     state.user = auth.user;
-    localStorage.setItem("cwu_access_token", auth.access_token);
-    localStorage.setItem("cwu_refresh_token", auth.refresh_token);
+    if (!desktop) {
+      localStorage.setItem("cwu_access_token", auth.access_token);
+      localStorage.setItem("cwu_refresh_token", auth.refresh_token);
+    }
   }
 
   function clearSession() {
