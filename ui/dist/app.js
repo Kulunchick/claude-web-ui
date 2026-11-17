@@ -438,69 +438,6 @@
     }
   }
 
-  function renderTreeNodes(nodes, depth = 0) {
-    if (!nodes || nodes.length === 0) return "";
-    return `<ul class="file-tree-list">${nodes.map((node) => {
-      const pad = depth * 12;
-      if (node.is_dir) {
-        const collapsed = !!state.collapsedDirs[node.path];
-        return `
-          <li>
-            <button class="tree-node-btn" style="padding-left:${8 + pad}px" data-dir-toggle="${esc(node.path)}">
-              ${collapsed ? "Ã¢â€“Â¸ Ã°Å¸â€œÂ" : "Ã¢â€“Â¾ Ã°Å¸â€œâ€š"} ${esc(node.name)}
-            </button>
-            ${collapsed ? "" : renderTreeNodes(node.children || [], depth + 1)}
-          </li>`;
-      }
-      const isSelected = state.activeFile && state.activeFile.path === node.path;
-      return `
-        <li>
-          <button class="tree-node-btn ${isSelected ? "active" : ""}" style="padding-left:${8 + pad}px" data-file-open="${esc(node.path)}">
-            Ã°Å¸â€œâ€ž ${esc(node.name)}
-          </button>
-        </li>`;
-    }).join("")}</ul>`;
-  }
-
-  function renderDiffBody() {
-    const diff = state.gitDiff;
-    if (!diff || !diff.is_git_repo) {
-      return `<p class="subtitle">Workspace is not a Git repository.</p>`;
-    }
-    if (!diff.files || diff.files.length === 0) {
-      return `<p class="subtitle">Working tree clean for current selection.</p>`;
-    }
-    if (state.diffMode === "split") {
-      const sections = diff.files.map((file) => {
-        const rowsHtml = (file.hunks || []).map((hunk) => {
-          const headerRow = `<div class="diff-hunk-header">${esc(hunk.header)}</div>`;
-          const splitRows = (hunk.split_rows || []).map((r) => `
-            <div class="diff-split-row">
-              <div class="diff-cell diff-${esc(r.left_kind)}">
-                <span class="diff-ln">${r.left_line ?? ""}</span>
-                <code>${esc(r.left_content ?? "")}</code>
-              </div>
-              <div class="diff-cell diff-${esc(r.right_kind)}">
-                <span class="diff-ln">${r.right_line ?? ""}</span>
-                <code>${esc(r.right_content ?? "")}</code>
-              </div>
-            </div>`).join("");
-          return headerRow + splitRows;
-        }).join("");
-        return `<div class="diff-file-block"><div class="diff-file-title">${esc(file.new_path)}</div>${rowsHtml}</div>`;
-      }).join("");
-      return `<div class="diff-split-container">${sections}</div>`;
-    }
-    const linesHtml = (diff.unified || "").split("\n").map((line) => {
-      let cls = "diff-ctx";
-      if (line.startsWith("+") && !line.startsWith("+++")) cls = "diff-add";
-      else if (line.startsWith("-") && !line.startsWith("---")) cls = "diff-rem";
-      else if (line.startsWith("@@") || line.startsWith("diff --git")) cls = "diff-meta";
-      return `<div class="${cls}">${esc(line)}</div>`;
-    }).join("");
-    return `<pre class="diff-unified">${linesHtml}</pre>`;
-  }
-
   function esc(str) {
     return String(str ?? "")
       .replace(/&/g, "&amp;")
@@ -532,6 +469,22 @@
       state.screen = screen;
       render();
     });
+  });
+
+  window.addEventListener("cwu:switch-project-cli", async ({ detail }) => {
+    const projectId = state.activeProjectId;
+    if (!state.user || !projectId || !state.projectCli?.can_switch) return;
+    state.error = null;
+    state.notice = null;
+    try {
+      const projectCli = await api(`/api/projects/${encodeURIComponent(projectId)}/cli`, { method: "PUT", body: detail });
+      if (state.activeProjectId !== projectId) return;
+      state.projectCli = projectCli;
+    } catch (error) {
+      if (state.activeProjectId !== projectId) return;
+      state.error = error.message;
+    }
+    render();
   });
 
   async function openProjectSession(sessionId, source) {
@@ -639,47 +592,6 @@
       button.disabled = false;
     }
   });
-
-  function renderHeaderSwitcher(activeProject) {
-    if (!activeProject || !state.projectCli) {
-      return `
-        <header class="dashboard-header">
-          <div class="cli-switcher">
-            <span class="subtitle">No active project selected</span>
-          </div>
-        </header>`;
-    }
-    const cli = state.projectCli;
-    if (!cli.can_switch) {
-      return `
-        <header class="dashboard-header">
-          <div class="cli-readonly-pill">
-            <span>Active CLI:</span>
-            <strong>${esc(PROVIDER_LABELS[cli.active_provider] || cli.active_provider)}</strong>
-            <span class="role-badge">Read-Only</span>
-          </div>
-        </header>`;
-    }
-    const providerOptions = Object.entries(PROVIDER_LABELS).map(([val, label]) =>
-      `<option value="${esc(val)}" ${cli.active_provider === val ? "selected" : ""}>${esc(label)}</option>`
-    ).join("");
-    const matchingAccounts = (cli.available_accounts || []).filter((a) => a.provider === cli.active_provider);
-    const accountOptions = [
-      `<option value="">Ã¢â‚¬â€ Select account Ã¢â‚¬â€</option>`,
-      ...matchingAccounts.map((a) =>
-        `<option value="${esc(a.id)}" ${cli.active_account_id === a.id ? "selected" : ""}>${esc(a.name)}</option>`
-      ),
-    ].join("");
-    return `
-      <header class="dashboard-header">
-        <div class="cli-switch-controls">
-          <label for="header-cli-provider">CLI</label>
-          <select id="header-cli-provider">${providerOptions}</select>
-          <label for="header-cli-account">Account</label>
-          <select id="header-cli-account">${accountOptions}</select>
-        </div>
-      </header>`;
-  }
 
   function renderAccountsTab() {
     const accountCards = state.adminAccounts.map((acc) => {
@@ -866,98 +778,6 @@
         </section>
       `;
     } else {
-      const readOnly = state.user.role === "viewer";
-      const gs = state.gitStatus;
-      const stagedHtml = (gs && gs.staged || []).map((c) => `
-        <button class="git-change-item" data-diff-path="${esc(c.path)}" data-diff-staged="true">
-          <span class="git-badge staged">${esc(c.status)}</span> ${esc(c.path)}
-        </button>`).join("");
-      const unstagedHtml = (gs && gs.unstaged || []).map((c) => `
-        <button class="git-change-item" data-diff-path="${esc(c.path)}" data-diff-staged="false">
-          <span class="git-badge unstaged">${esc(c.status)}</span> ${esc(c.path)}
-        </button>`).join("");
-      const untrackedHtml = (gs && gs.untracked || []).map((p) => `
-        <button class="git-change-item" data-diff-path="${esc(p)}" data-diff-staged="false">
-          <span class="git-badge untracked">?</span> ${esc(p)}
-        </button>`).join("");
-      const commitsHtml = (gs && gs.recent_commits || []).map((cm) => `
-        <div class="commit-item">
-          <code>${esc(cm.short_hash)}</code>
-          <span class="commit-msg">${esc(cm.message)}</span>
-          <span class="commit-meta">${esc(cm.author_name)}</span>
-        </div>`).join("");
-
-      const filesGitHtml = `
-        <section class="panel-card workspace-header-card">
-          <div>
-            <h2>${esc(activeProject.name)}</h2>
-            <p class="subtitle" style="margin:0">${esc(activeProject.workspace_path)}</p>
-          </div>
-          <div class="files-git-controls">
-            <label class="toggle-label">
-              <input type="checkbox" id="toggle-gitignore" ${state.respectGitignore ? "checked" : ""} />
-              <span>Respect .gitignore</span>
-            </label>
-            <button class="btn-secondary" type="button" id="refresh-workspace-btn">Refresh</button>
-          </div>
-        </section>
-
-        <div class="files-git-grid">
-          <section class="panel-card file-tree-pane">
-            <div class="pane-head">
-              <h3>Files</h3>
-            </div>
-            ${!readOnly ? `
-              <form id="new-file-form" class="new-file-form">
-                <input name="path" placeholder="new/file.txt" required />
-                <button class="btn-secondary" type="submit">+</button>
-              </form>` : ""}
-            <div class="tree-scroll">${renderTreeNodes(state.fileTree) || "<p class='subtitle'>Empty workspace</p>"}</div>
-          </section>
-
-          <section class="panel-card editor-pane">
-            <div class="editor-toolbar">
-              <strong>${state.activeFile ? esc(state.activeFile.path) : "Select a file"}</strong>
-              <div class="files-git-controls">
-                ${readOnly ? `<span class="role-badge">Read-Only (Viewer)</span>` : `
-                  <button class="btn-primary" type="button" id="save-file-btn" ${!state.activeFile || state.activeFile.is_binary ? "disabled" : ""}>
-                    ${state.editorDirty ? "Save *" : "Save"}
-                  </button>`}
-              </div>
-            </div>
-            ${state.activeFile && state.activeFile.is_binary
-              ? `<p class="subtitle">Binary file (${state.activeFile.size} bytes) cannot be edited in text view.</p>`
-              : `<textarea id="code-editor" class="code-editor" ${readOnly || !state.activeFile ? "readonly" : ""} placeholder="Select a file from the explorer...">${esc(state.editorText)}</textarea>`}
-          </section>
-
-          <section class="panel-card git-pane">
-            <div class="pane-head">
-              <h3>Git ${gs && gs.branch ? `<span class="role-badge">${esc(gs.branch)}</span>` : ""}</h3>
-              <div class="files-git-controls">
-                <button class="btn-secondary" type="button" id="diff-all-btn">All</button>
-                <button class="btn-secondary" type="button" id="toggle-diff-mode-btn">${state.diffMode === "unified" ? "Unified" : "Split"}</button>
-              </div>
-            </div>
-            <div class="git-changes-section">
-              <div class="git-group-label">Staged (${(gs && gs.staged || []).length})</div>
-              ${stagedHtml || "<p class='subtitle'>None</p>"}
-              <div class="git-group-label">Unstaged (${(gs && gs.unstaged || []).length})</div>
-              ${unstagedHtml || "<p class='subtitle'>None</p>"}
-              <div class="git-group-label">Untracked (${(gs && gs.untracked || []).length})</div>
-              ${untrackedHtml || "<p class='subtitle'>None</p>"}
-            </div>
-            <div class="git-diff-section">
-              <div class="git-group-label">Diff ${state.diffPath ? `(${esc(state.diffPath)})` : "(Workspace)"}</div>
-              ${renderDiffBody()}
-            </div>
-            <div class="git-commits-section">
-              <div class="git-group-label">Recent Commits</div>
-              ${commitsHtml || "<p class='subtitle'>No commits</p>"}
-            </div>
-          </section>
-        </div>
-      `;
-
       mainHtml = `
         <div class="tab-bar" style="margin:0;">
           <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
@@ -965,7 +785,7 @@
           <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
           <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
         </div>
-        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
+        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
       `;
     }
 
@@ -996,7 +816,7 @@
           </div>
         </aside>
         <main class="dashboard-main">
-          ${renderHeaderSwitcher(activeProject)}
+          <div id="project-cli-workspace"></div>
           ${errHtml}${okHtml}${mainHtml}
         </main>
       </div>
@@ -1004,10 +824,29 @@
     `;
 
     leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
+    leptos.mount_cli_switcher(document.getElementById("project-cli-workspace"), JSON.stringify(state.projectCli));
     const cron = document.getElementById("cron-workspace");
     if (cron) leptos.mount_cron(cron, state.activeProjectId, state.accessToken || "");
     const kanban = document.getElementById("kanban-workspace");
     if (kanban) leptos.mount_kanban(kanban, state.activeProjectId, state.accessToken || "", state.user.role === "viewer");
+    const files = document.getElementById("files-git-workspace");
+    if (files) {
+      leptos.mount_files_git(files, JSON.stringify({
+        project_name: activeProject.name,
+        workspace_path: activeProject.workspace_path,
+        read_only: state.user.role === "viewer",
+        respect_gitignore: state.respectGitignore,
+        file_tree: state.fileTree,
+        collapsed_dirs: state.collapsedDirs,
+        active_file: state.activeFile,
+        editor_text: state.editorText,
+        editor_dirty: state.editorDirty,
+        git_status: state.gitStatus,
+        git_diff: state.gitDiff,
+        diff_mode: state.diffMode,
+        diff_path: state.diffPath,
+      }));
+    }
     const admin = document.getElementById("admin-workspace");
     if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
     bindDashboardHandlers();
@@ -1800,36 +1639,6 @@
       state.screen = "login";
       render();
     };
-
-    const providerSel = document.getElementById("header-cli-provider");
-    const accountSel = document.getElementById("header-cli-account");
-    if (providerSel) {
-      providerSel.onchange = async () => {
-        state.error = null; state.notice = null;
-        try {
-          state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`, {
-            method: "PUT",
-            body: JSON.stringify({ provider: providerSel.value, account_id: null }),
-          });
-          render();
-        } catch (err) { state.error = err.message; render(); }
-      };
-    }
-    if (accountSel) {
-      accountSel.onchange = async () => {
-        state.error = null; state.notice = null;
-        try {
-          state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`, {
-            method: "PUT",
-            body: JSON.stringify({
-              provider: providerSel.value,
-              account_id: accountSel.value || null,
-            }),
-          });
-          render();
-        } catch (err) { state.error = err.message; render(); }
-      };
-    }
 
     const openModalBtn = document.getElementById("open-add-account-btn");
     if (openModalBtn) {

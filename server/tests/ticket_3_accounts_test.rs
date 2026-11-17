@@ -957,8 +957,8 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert_eq!(js_resp.status(), StatusCode::OK);
     let js_bytes = js_resp.into_body().collect().await.unwrap().to_bytes();
     let js = String::from_utf8_lossy(&js_bytes);
-    assert!(js.contains("header-cli-provider"));
-    assert!(js.contains("header-cli-account"));
+    assert!(js.contains("leptos.mount_cli_switcher"));
+    assert!(js.contains("cwu:switch-project-cli"));
     assert!(js.contains("/login-pty"));
     assert!(js.contains("/credentials"));
     assert!(js.contains("Add Account"));

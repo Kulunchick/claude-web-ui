@@ -182,3 +182,38 @@ pub fn mount_admin(
     MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
     Ok(())
 }
+
+#[wasm_bindgen]
+pub fn mount_files_git(parent: HtmlElement, workspace: &str) -> Result<(), JsValue> {
+    let state: crate::files_git_view::WorkspaceBrowserState =
+        serde_json::from_str(workspace).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        view! { <crate::files_git_view::WorkspaceFilesGitBrowser state=state /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn mount_cli_switcher(parent: HtmlElement, project_cli: &str) -> Result<(), JsValue> {
+    use claude_web_ui_shared::accounts::{ProjectCliStateDto, SwitchProjectCliRequest};
+
+    let cli: Option<ProjectCliStateDto> =
+        serde_json::from_str(project_cli).map_err(|err| JsValue::from(err.to_string()))?;
+    let handle = mount_to(parent, move || {
+        let (project_cli, _) = signal(cli);
+        view! {
+            <crate::accounts_view::HeaderCliSwitcher
+                project_cli=project_cli
+                on_switch=Callback::new(|(provider, account_id)| {
+                    let request = SwitchProjectCliRequest { provider, account_id };
+                    if let Ok(json) = serde_json::to_string(&request) {
+                        emit("cwu:switch-project-cli", &json);
+                    }
+                })
+            />
+        }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
+}

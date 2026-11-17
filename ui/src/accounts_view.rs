@@ -13,8 +13,18 @@ pub fn HeaderCliSwitcher(
     project_cli: ReadSignal<Option<ProjectCliStateDto>>,
     #[prop(optional)] on_switch: Option<Callback<(CliProvider, Option<String>)>>,
 ) -> impl IntoView {
-    let selected_provider = RwSignal::new(CliProvider::ClaudeCode);
-    let selected_account = RwSignal::new(String::new());
+    let initial = project_cli.get_untracked();
+    let selected_provider = RwSignal::new(
+        initial
+            .as_ref()
+            .map(|cli| cli.active_provider)
+            .unwrap_or(CliProvider::ClaudeCode),
+    );
+    let selected_account = RwSignal::new(
+        initial
+            .and_then(|cli| cli.active_account_id)
+            .unwrap_or_default(),
+    );
 
     Effect::new(move |_| {
         if let Some(cli) = project_cli.get() {
@@ -41,7 +51,7 @@ pub fn HeaderCliSwitcher(
                         let accounts = cli.available_accounts.clone();
                         view! {
                             <div class="cli-switch-controls">
-                                <label>"CLI Provider"</label>
+                                <label for="header-cli-provider">"CLI Provider"</label>
                                 <select
                                     id="header-cli-provider"
                                     prop:value=move || selected_provider.get().as_str()
@@ -58,7 +68,7 @@ pub fn HeaderCliSwitcher(
                                     <option value="codex">"Codex"</option>
                                     <option value="antigravity">"Antigravity"</option>
                                 </select>
-                                <label>"Account"</label>
+                                <label for="header-cli-account">"Account"</label>
                                 <select
                                     id="header-cli-account"
                                     prop:value=move || selected_account.get()
