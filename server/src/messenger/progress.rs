@@ -216,11 +216,11 @@ async fn notify(state: &AppState, card: &KanbanCardDto) -> Result<(), AppError> 
     let Some(next) = kanban_action(card.column) else {
         return Ok(());
     };
-    let destinations: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT platform, chat_id, NULL FROM messenger_channels
+    let destinations: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT platform, chat_id, NULL, notification_thread_id FROM messenger_channels
          WHERE project_id = ? AND notify = 1
          UNION ALL
-         SELECT n.platform, l.dm_chat_id, n.external_user_id
+         SELECT n.platform, l.dm_chat_id, n.external_user_id, NULL
          FROM messenger_dm_notifications n JOIN user_messenger_links l
            ON l.platform = n.platform AND l.external_user_id = n.external_user_id
          WHERE n.project_id = ?",
@@ -229,14 +229,14 @@ async fn notify(state: &AppState, card: &KanbanCardDto) -> Result<(), AppError> 
     .bind(&card.project_id)
     .fetch_all(&state.db)
     .await?;
-    for (platform, chat, private_user) in destinations {
+    for (platform, chat, private_user, thread) in destinations {
         let Some(platform) = MessengerPlatform::from_storage(&platform) else {
             continue;
         };
         let dest = Destination {
             platform,
             chat,
-            thread: None,
+            thread,
             private_user,
         };
         let can_move = if let Some(external) = &dest.private_user {

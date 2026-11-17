@@ -242,6 +242,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             chat_id TEXT NOT NULL,
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             notify INTEGER NOT NULL DEFAULT 0,
+            notification_thread_id TEXT,
             PRIMARY KEY (platform, chat_id)
         );
 

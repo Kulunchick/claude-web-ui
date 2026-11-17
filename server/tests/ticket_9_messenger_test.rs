@@ -189,12 +189,19 @@ impl Harness {
     }
 
     async fn viewer(&self) -> String {
+        self.member("viewer").await["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn member(&self, role: &str) -> Value {
         let (status, invite) = post(
             &self.server,
             "/api/admin/invites",
             Some(&self.admin_token),
             json!({
-                "role": "viewer", "project_ids": [&self.project]
+                "role": role, "project_ids": [&self.project]
             }),
         )
         .await;
@@ -203,7 +210,7 @@ impl Harness {
             "code": invite["code"], "username": "reader", "email": "reader@example.com", "password": "long-enough-password"
         })).await;
         assert_eq!(status, StatusCode::CREATED);
-        auth["access_token"].as_str().unwrap().to_owned()
+        auth
     }
 
     async fn send(&self, event: IncomingMessengerEvent) {
@@ -536,12 +543,24 @@ async fn interactive_status_coalesces_events_and_permission_actions_stay_scoped(
 }
 
 #[tokio::test]
-async fn kanban_transition_notifies_linked_dm_with_project_checked_quick_action() {
+async fn kanban_transition_notifies_dm_and_bound_thread_with_project_checked_actions() {
     let h = Harness::new().await;
     h.pair(&h.admin_token, discord_dm("42", "")).await;
     h.send(discord_dm("42", &format!("/project {}", h.project)))
         .await;
     h.send(discord_dm("42", "/notify on")).await;
+    h.pair(&h.viewer().await, discord_dm("99", "")).await;
+    let forum = |actor: &str, text: &str| {
+        thread(
+            MessengerPlatform::Discord,
+            actor,
+            "forum",
+            Some("updates"),
+            text,
+        )
+    };
+    h.send(forum("42", &format!("/bind {}", h.project))).await;
+    h.send(forum("42", "/notify on")).await;
     let path = format!("/api/projects/{}/kanban", h.project);
     let (status, card) = post(
         &h.server,
@@ -564,16 +583,61 @@ async fn kanban_transition_notifies_linked_dm_with_project_checked_quick_action(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, done, text) = buttons_for(&h, "Mark done").await;
+    let done_in_thread = until(|| {
+        h.messenger
+            .sent_messages()
+            .into_iter()
+            .find(|entry| {
+                entry.message.thread_id.as_deref() == Some("updates")
+                    && entry
+                        .message
+                        .buttons
+                        .iter()
+                        .flatten()
+                        .any(|button| button.label == "Mark done")
+            })
+            .map(|entry| entry.message.buttons[0][0].callback_data.clone())
+    })
+    .await;
+    let forbidden = h
+        .server
+        .handle_messenger_event(callback(forum("99", ""), &done_in_thread))
+        .await
+        .expect_err("Viewer cannot move the card even from its own thread");
+    assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+    assert!(forbidden.message.contains("viewer"));
+
+    let (done_in_dm, text) = until(|| {
+        h.messenger
+            .sent_messages()
+            .into_iter()
+            .find(|entry| {
+                entry.message.chat_id == "dm-42"
+                    && entry
+                        .message
+                        .buttons
+                        .iter()
+                        .flatten()
+                        .any(|button| button.label == "Mark done")
+            })
+            .map(|entry| {
+                (
+                    entry.message.buttons[0][0].callback_data.clone(),
+                    entry.message.text,
+                )
+            })
+    })
+    .await;
     assert!(text.contains("Review this work"));
     assert!(text.contains("Fixture tests pass"));
     assert!(
         h.server
-            .handle_messenger_event(callback(telegram("42", ""), &done))
+            .handle_messenger_event(callback(telegram("42", ""), &done_in_dm))
             .await
             .is_err()
     );
-    h.send(callback(discord_dm("42", ""), &done)).await;
+    h.send(callback(discord_dm("42", ""), &done_in_dm)).await;
+
     let (_, board) = request(
         &h.server,
         Method::GET,
@@ -583,4 +647,97 @@ async fn kanban_transition_notifies_linked_dm_with_project_checked_quick_action(
     )
     .await;
     assert_eq!(board[0]["column"], "done");
+}
+
+#[tokio::test]
+async fn account_menu_preserves_native_session_and_rejects_disallowed_project_default() {
+    let h = Harness::new().await;
+    let developer = h.member("developer").await;
+    let token = developer["access_token"].as_str().unwrap();
+    h.pair(token, telegram("42", "")).await;
+    let account = |name| json!({"provider": "claude_code", "name": name});
+    let (status, first) = post(
+        &h.server,
+        "/api/admin/accounts",
+        Some(&h.admin_token),
+        account("First account"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, second) = post(
+        &h.server,
+        "/api/admin/accounts",
+        Some(&h.admin_token),
+        account("Second account"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let switch_path = format!("/api/projects/{}/cli", h.project);
+    let (status, _) = request(
+        &h.server,
+        Method::PUT,
+        &switch_path,
+        Some(&h.admin_token),
+        json!({
+            "provider": "claude_code", "account_id": first["id"]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    h.send(telegram("42", &format!("/project {}", h.project)))
+        .await;
+    h.send(telegram("42", "/new Native resume")).await;
+    h.runner.push_turn(vec![TurnEvent::TurnComplete {
+        session_id: Some("native-resume-id".into()),
+        result_text: "Saved for resume".into(),
+    }]);
+    h.send(telegram("42", "First account prompt")).await;
+    until(|| {
+        h.messenger
+            .sent_messages()
+            .iter()
+            .any(|m| m.message.text == "Saved for resume")
+            .then_some(())
+    })
+    .await;
+
+    h.send(telegram("42", "/account")).await;
+    let (_, switch, _) = buttons_for(&h, "Second account").await;
+    h.send(callback(telegram("42", ""), &switch)).await;
+    h.send(telegram("42", "Second account prompt")).await;
+    let invocation = until(|| h.runner.recorded_invocations().get(1).cloned()).await;
+    assert_eq!(
+        invocation.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        second["profile_dir"].as_str()
+    );
+    assert!(
+        invocation
+            .args
+            .windows(2)
+            .any(|args| args == ["--resume", "native-resume-id"])
+    );
+
+    let acl_path = format!(
+        "/api/admin/projects/{}/members/{}/accounts",
+        h.project,
+        developer["user"]["id"].as_str().unwrap()
+    );
+    let (status, _) = request(
+        &h.server,
+        Method::PUT,
+        &acl_path,
+        Some(&h.admin_token),
+        json!({
+            "allowed_accounts": [first["id"]]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let denied = h
+        .server
+        .handle_messenger_event(telegram("42", "Request with a disallowed default"))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    assert_eq!(h.runner.recorded_invocations().len(), 2);
 }

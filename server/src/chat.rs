@@ -399,24 +399,26 @@ impl ExecutionScheduler {
         }
 
         let session = load_chat_session(&self.db, &params.project_id, &params.session_id).await?;
-        let (active_provider, active_account, _) =
-            resolve_project_cli_env(&self.db, &params.project_id).await?;
-        let provider = if session.provider != active_provider && session.native_session_id.is_none()
-        {
-            active_provider
-        } else {
-            session.provider
-        };
-        let account_id = active_account
-            .filter(|a| a.provider == provider)
-            .map(|a| a.id);
-
-        if authorize_actor {
-            let (_, account_id, _) = self.session_cli(&session).await?;
+        let (provider, account_id) = if authorize_actor {
+            let (provider, account_id, _) = self.session_cli(&session).await?;
             crate::accounts::authorize_turn_account(
-                &self.db, &params.project_id, &params.user_id, account_id.as_deref()
+                &self.db,
+                &params.project_id,
+                &params.user_id,
+                account_id.as_deref(),
             ).await?;
-        }
+            (provider, account_id)
+        } else {
+            let (active_provider, active_account, _) =
+                resolve_project_cli_env(&self.db, &params.project_id).await?;
+            let provider = if session.provider != active_provider && session.native_session_id.is_none() {
+                active_provider
+            } else {
+                session.provider
+            };
+            let account_id = active_account.filter(|account| account.provider == provider).map(|account| account.id);
+            (provider, account_id)
+        };
 
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -656,8 +658,7 @@ impl ExecutionScheduler {
         let (active_provider, active_account, active_env) =
             resolve_project_cli_env(&self.db, &session.project_id).await?;
 
-        // Use session's provider unless the session has not started yet and project switched CLIs,
-        // and always inject the active account env vars when provider matches.
+        // Each native session belongs to its provider, which may have a remembered account.
         let effective_provider = session.provider;
         let (account_id, env) = if active_provider == effective_provider {
             (active_account.map(|a| a.id), active_env)

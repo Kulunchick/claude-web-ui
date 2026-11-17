@@ -389,8 +389,10 @@ async fn dispatch(
                 .execute(&mut *tx)
                 .await?;
         }
-        sqlx::query("INSERT OR IGNORE INTO messenger_channels (platform, chat_id, project_id, notify) VALUES (?, ?, ?, 1)")
-            .bind(dest.platform.as_str()).bind(&dest.chat).bind(&project).execute(&mut *tx).await?;
+        sqlx::query("INSERT OR IGNORE INTO messenger_channels (platform, chat_id, project_id, notify, notification_thread_id)
+            VALUES (?, ?, ?, 1, ?)")
+            .bind(dest.platform.as_str()).bind(&dest.chat).bind(&project).bind(&dest.thread)
+            .execute(&mut *tx).await?;
         tx.commit().await?;
         return dest
             .reply(
@@ -789,7 +791,7 @@ async fn switch_cli(
                 &ctx.project.id,
                 &ctx.user.user.id,
                 CreateChatSessionRequest {
-                    title: Some(format!("{} continuation", session.title)),
+                    title: Some(format!("{} ({})", session.title, provider.display_name())),
                     provider: Some(provider),
                     native_session_id: None,
                     approval_mode: Some(session.approval_mode),
@@ -955,8 +957,17 @@ async fn toggle_notifications(
                 "only an administrator can change channel notifications",
             ));
         }
-        sqlx::query("UPDATE messenger_channels SET notify = ? WHERE platform = ? AND chat_id = ? AND project_id = ?")
-            .bind(enabled).bind(dest.platform.as_str()).bind(&dest.chat).bind(&ctx.project.id).execute(&state.db).await?;
+        sqlx::query(
+            "UPDATE messenger_channels SET notify = ?, notification_thread_id = ?
+             WHERE platform = ? AND chat_id = ? AND project_id = ?",
+        )
+        .bind(enabled)
+        .bind(&dest.thread)
+        .bind(dest.platform.as_str())
+        .bind(&dest.chat)
+        .bind(&ctx.project.id)
+        .execute(&state.db)
+        .await?;
     }
     dest.reply(
         state,
