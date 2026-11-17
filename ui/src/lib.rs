@@ -13,6 +13,7 @@ use auth_view::{
 };
 use claude_web_ui_shared::accounts::{CliAccountDto, ProjectCliStateDto};
 use claude_web_ui_shared::auth::{ProjectDto, UserDto};
+use files_git_view::WorkspaceFilesGitView;
 use leptos::prelude::*;
 
 #[component]
@@ -52,33 +53,40 @@ pub fn GatewayApp(
             </main>
         }
         .into_any(),
-        Some(current_user) => view! {
-            <div class="dashboard-shell">
-                <ProjectSwitcherSidebar
-                    projects=projects
-                    active_project_id=active_project_id
-                    current_user=current_user
-                    active_tab=active_tab
-                />
-                <main class="dashboard-main">
-                    <HeaderCliSwitcher project_cli=project_cli />
-                    {move || match active_tab.get() {
-                        DashboardTab::ProjectOverview => view! {
-                            <section class="panel-card">
-                                <h2>"Project Workspace"</h2>
-                                <p>{move || active_project_id.get().unwrap_or_else(|| "Select a project from the sidebar.".to_string())}</p>
-                            </section>
-                        }.into_any(),
-                        DashboardTab::AdminUsersProjects => view! {
-                            <AdminUsersProjectsView users=users projects=projects />
-                        }.into_any(),
-                        DashboardTab::AdminAccounts => view! {
-                            <AccountsManagerView accounts=accounts projects=projects users=users />
-                        }.into_any(),
-                    }}
-                </main>
-            </div>
+        Some(current_user) => {
+            let current_role = current_user.role;
+            view! {
+                <div class="dashboard-shell">
+                    <ProjectSwitcherSidebar
+                        projects=projects
+                        active_project_id=active_project_id
+                        current_user=current_user
+                        active_tab=active_tab
+                    />
+                    <main class="dashboard-main">
+                        <HeaderCliSwitcher project_cli=project_cli />
+                        {move || match active_tab.get() {
+                            DashboardTab::ProjectOverview => view! {
+                                <section class="panel-card">
+                                    <h2>"Project Workspace"</h2>
+                                    <p>{move || active_project_id.get().unwrap_or_else(|| "Select a project from the sidebar.".to_string())}</p>
+                                </section>
+                                <WorkspaceFilesGitView
+                                    project_id=active_project_id.get().unwrap_or_default()
+                                    user_role=current_role
+                                />
+                            }.into_any(),
+                            DashboardTab::AdminUsersProjects => view! {
+                                <AdminUsersProjectsView users=users projects=projects />
+                            }.into_any(),
+                            DashboardTab::AdminAccounts => view! {
+                                <AccountsManagerView accounts=accounts projects=projects users=users />
+                            }.into_any(),
+                        }}
+                    </main>
+                </div>
+            }
+            .into_any()
         }
-        .into_any(),
     }
 }
