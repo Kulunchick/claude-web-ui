@@ -1,4 +1,10 @@
 (() => {
+  const PROVIDER_LABELS = {
+    claude_code: "Claude Code",
+    codex: "Codex",
+    antigravity: "Antigravity",
+  };
+
   const state = {
     initialized: true,
     screen: "login",
@@ -7,9 +13,17 @@
     user: null,
     projects: [],
     activeProjectId: null,
+    projectCli: null,
     tab: "overview",
     adminUsers: [],
     adminInvites: [],
+    adminAccounts: [],
+    aclProjectId: null,
+    aclMembers: [],
+    aclList: [],
+    addAccountModal: null,
+    ptySocket: null,
+    ptyTerminal: null,
     error: null,
     notice: null,
   };
@@ -32,6 +46,17 @@
     return data;
   }
 
+  function closeActivePty() {
+    if (state.ptySocket) {
+      try { state.ptySocket.close(); } catch {}
+      state.ptySocket = null;
+    }
+    if (state.ptyTerminal) {
+      try { state.ptyTerminal.dispose(); } catch {}
+      state.ptyTerminal = null;
+    }
+  }
+
   function saveTokens(auth) {
     state.accessToken = auth.access_token;
     state.refreshToken = auth.refresh_token;
@@ -41,10 +66,14 @@
   }
 
   function clearSession() {
+    closeActivePty();
     state.accessToken = null;
     state.refreshToken = null;
     state.user = null;
     state.projects = [];
+    state.projectCli = null;
+    state.adminAccounts = [];
+    state.addAccountModal = null;
     localStorage.removeItem("cwu_access_token");
     localStorage.removeItem("cwu_refresh_token");
   }
@@ -75,6 +104,28 @@
     render();
   }
 
+  async function loadProjectCli() {
+    if (!state.activeProjectId) {
+      state.projectCli = null;
+      return;
+    }
+    try {
+      state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`);
+    } catch {
+      state.projectCli = null;
+    }
+  }
+
+  async function loadAclProjectData(projectId) {
+    if (!projectId || state.user?.role !== "admin") {
+      state.aclMembers = [];
+      state.aclList = [];
+      return;
+    }
+    state.aclMembers = await api(`/api/admin/projects/${projectId}/members`);
+    state.aclList = await api(`/api/admin/projects/${projectId}/account-acls`);
+  }
+
   async function loadAuthenticatedData() {
     const me = await api("/api/auth/me");
     state.user = me.user;
@@ -82,9 +133,17 @@
     if (!state.activeProjectId && state.projects.length > 0) {
       state.activeProjectId = state.projects[0].id;
     }
+    await loadProjectCli();
     if (state.user.role === "admin") {
       state.adminUsers = await api("/api/admin/users");
       state.adminInvites = await api("/api/admin/invites");
+      state.adminAccounts = await api("/api/admin/accounts");
+      if (!state.aclProjectId && state.projects.length > 0) {
+        state.aclProjectId = state.projects[0].id;
+      }
+      if (state.aclProjectId) {
+        await loadAclProjectData(state.aclProjectId);
+      }
     }
     render();
   }
@@ -95,6 +154,13 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function linkifyUrls(text) {
+    return esc(text).replace(
+      /(https?:\/\/[^\s<>"']+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
   }
 
   function render() {
@@ -206,7 +272,211 @@
     };
   }
 
+  function renderHeaderSwitcher(activeProject) {
+    if (!activeProject || !state.projectCli) {
+      return `
+        <header class="dashboard-header">
+          <div class="cli-switcher">
+            <span class="subtitle">No active project selected</span>
+          </div>
+        </header>`;
+    }
+    const cli = state.projectCli;
+    if (!cli.can_switch) {
+      return `
+        <header class="dashboard-header">
+          <div class="cli-readonly-pill">
+            <span>Active CLI:</span>
+            <strong>${esc(PROVIDER_LABELS[cli.active_provider] || cli.active_provider)}</strong>
+            <span class="role-badge">Read-Only</span>
+          </div>
+        </header>`;
+    }
+    const providerOptions = Object.entries(PROVIDER_LABELS).map(([val, label]) =>
+      `<option value="${esc(val)}" ${cli.active_provider === val ? "selected" : ""}>${esc(label)}</option>`
+    ).join("");
+    const matchingAccounts = (cli.available_accounts || []).filter((a) => a.provider === cli.active_provider);
+    const accountOptions = [
+      `<option value="">— Select account —</option>`,
+      ...matchingAccounts.map((a) =>
+        `<option value="${esc(a.id)}" ${cli.active_account_id === a.id ? "selected" : ""}>${esc(a.name)}</option>`
+      ),
+    ].join("");
+    return `
+      <header class="dashboard-header">
+        <div class="cli-switch-controls">
+          <label for="header-cli-provider">CLI</label>
+          <select id="header-cli-provider">${providerOptions}</select>
+          <label for="header-cli-account">Account</label>
+          <select id="header-cli-account">${accountOptions}</select>
+        </div>
+      </header>`;
+  }
+
+  function renderAccountsTab() {
+    const accountCards = state.adminAccounts.map((acc) => {
+      const creds = acc.credential_files && acc.credential_files.length > 0
+        ? `Credentials: ${acc.credential_files.map(esc).join(", ")}`
+        : "Not authenticated yet";
+      return `
+        <article class="panel-card account-card">
+          <div class="panel-header-row">
+            <strong>${esc(acc.name)}</strong>
+            <span class="role-badge">${esc(PROVIDER_LABELS[acc.provider] || acc.provider)}</span>
+          </div>
+          <p class="project-path">${esc(acc.profile_dir)}</p>
+          <p class="subtitle">${creds}</p>
+          <div class="btn-group">
+            <button class="btn-secondary" data-auth-acc="${esc(acc.id)}">OAuth / Credentials</button>
+            <button class="btn-secondary" data-rename-acc="${esc(acc.id)}">Rename</button>
+            <button class="btn-danger" data-del-acc="${esc(acc.id)}">Delete</button>
+          </div>
+        </article>`;
+    }).join("");
+
+    const projectOptions = state.projects.map((p) =>
+      `<option value="${esc(p.id)}" ${p.id === state.aclProjectId ? "selected" : ""}>${esc(p.name)}</option>`
+    ).join("");
+
+    const devMembers = state.aclMembers.filter((m) => m.role === "developer");
+    const aclRows = devMembers.map((m) => {
+      const acl = state.aclList.find((a) => a.user_id === m.user_id) || { restricted: false, allowed_accounts: [] };
+      const accountCheckboxes = state.adminAccounts.map((acc) => {
+        const checked = acl.restricted && acl.allowed_accounts.includes(acc.id) ? "checked" : "";
+        return `
+          <label class="checkbox-item">
+            <input type="checkbox" data-acl-acc="${esc(m.user_id)}" value="${esc(acc.id)}" ${checked} />
+            ${esc(acc.name)} (${esc(PROVIDER_LABELS[acc.provider] || acc.provider)})
+          </label>`;
+      }).join("");
+      return `
+        <div class="panel-card">
+          <div class="panel-header-row">
+            <strong>${esc(m.username)}</strong>
+            <label class="checkbox-item">
+              <input type="checkbox" data-acl-unrestricted="${esc(m.user_id)}" ${!acl.restricted ? "checked" : ""} />
+              Unrestricted (All Accounts)
+            </label>
+          </div>
+          <div class="checkbox-list">${accountCheckboxes || "<span class='subtitle'>No CLI accounts created yet.</span>"}</div>
+          <button class="btn-secondary" data-save-acl="${esc(m.user_id)}">Save ACL</button>
+        </div>`;
+    }).join("");
+
+    return `
+      <section class="panel-card">
+        <div class="panel-header-row">
+          <div>
+            <h2>CLI Accounts &amp; OAuth Profiles</h2>
+            <p class="subtitle">Isolated credentials per account with shared provider sessions &amp; skills.</p>
+          </div>
+          <button class="btn-primary" id="open-add-account-btn" type="button">+ Add Account</button>
+        </div>
+        <div class="admin-grid">${accountCards || "<p class='subtitle'>No CLI accounts yet.</p>"}</div>
+      </section>
+      <section class="panel-card">
+        <h3>Developer Account ACLs</h3>
+        <div class="form-group">
+          <label>Project</label>
+          <select id="acl-project-select">${projectOptions || "<option value=''>No projects</option>"}</select>
+        </div>
+        ${aclRows || "<p class='subtitle'>No Developer members assigned to this project.</p>"}
+      </section>`;
+  }
+
+  function renderAddAccountModal() {
+    const modal = state.addAccountModal;
+    if (!modal) return "";
+
+    if (modal.step === "create") {
+      return `
+        <div class="modal-backdrop">
+          <div class="modal-card">
+            <div class="panel-header-row">
+              <h3>Add Account</h3>
+              <button class="btn-secondary" id="close-account-modal" type="button">Close</button>
+            </div>
+            <form id="create-account-form">
+              <div class="form-group">
+                <label>CLI Provider</label>
+                <select name="provider">
+                  <option value="claude_code">Claude Code</option>
+                  <option value="codex">Codex</option>
+                  <option value="antigravity">Antigravity</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Account Name</label>
+                <input name="name" placeholder="e.g. Work, Personal" required />
+              </div>
+              <button class="btn-primary" type="submit">Create Profile &amp; Authenticate</button>
+            </form>
+          </div>
+        </div>`;
+    }
+
+    const acc = state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account;
+    const credFilesHtml = (acc.credential_files || []).map((f) => `
+      <div class="row">
+        <code>${esc(f)}</code>
+        <button class="btn-danger" data-del-cred="${esc(f)}" type="button">Delete</button>
+      </div>
+    `).join("");
+
+    const bodyHtml = modal.tab === "credentials"
+      ? `
+        <form id="upload-cred-form">
+          <div class="form-group">
+            <label>Choose Credential File (.credentials.json, .claude.json, auth.json)</label>
+            <input type="file" id="cred-file-picker" />
+          </div>
+          <div class="form-group">
+            <label>Target Filename</label>
+            <input id="cred-filename" name="filename" value=".credentials.json" required />
+          </div>
+          <div class="form-group">
+            <label>Paste Credential Content</label>
+            <textarea id="cred-content" name="content" rows="6" required></textarea>
+          </div>
+          <button class="btn-primary" type="submit">Save Credential File</button>
+        </form>
+        <div style="margin-top: 14px;">
+          <h4>Stored Credential Files</h4>
+          ${credFilesHtml || "<p class='subtitle'>No credential files uploaded yet.</p>"}
+        </div>`
+      : `
+        <div class="btn-group" style="margin-bottom: 10px;">
+          <button class="btn-secondary" id="launch-oauth-pty-btn" type="button">Launch OAuth Terminal</button>
+        </div>
+        <div id="oauth-xterm-host" class="xterm-container">
+          <pre id="oauth-xterm-fallback" class="xterm-fallback-log">Click "Launch OAuth Terminal" to start ${esc(PROVIDER_LABELS[acc.provider] || acc.provider)} login...</pre>
+          <form id="oauth-fallback-input-form" style="display:none; gap:8px;">
+            <input id="oauth-fallback-input" placeholder="Paste OAuth code and press Enter..." />
+            <button class="btn-secondary" type="submit">Send</button>
+          </form>
+        </div>`;
+
+    return `
+      <div class="modal-backdrop">
+        <div class="modal-card">
+          <div class="panel-header-row">
+            <div>
+              <h3>Authenticate: ${esc(acc.name)}</h3>
+              <span class="role-badge">${esc(PROVIDER_LABELS[acc.provider] || acc.provider)}</span>
+            </div>
+            <button class="btn-secondary" id="close-account-modal" type="button">Close</button>
+          </div>
+          <div class="tab-bar">
+            <button class="btn-secondary ${modal.tab === "pty" ? "active" : ""}" id="modal-tab-pty" type="button">OAuth Terminal (xterm.js)</button>
+            <button class="btn-secondary ${modal.tab === "credentials" ? "active" : ""}" id="modal-tab-creds" type="button">Upload / Paste Credentials</button>
+          </div>
+          ${bodyHtml}
+        </div>
+      </div>`;
+  }
+
   function renderDashboard() {
+    closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
     const isAdmin = state.user.role === "admin";
     const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
@@ -268,6 +538,8 @@
         <div class="panel-card"><h3>Users</h3>${usersHtml || "<p class='subtitle'>No users.</p>"}</div>
         <div class="panel-card"><h3>Invites</h3>${invitesHtml || "<p class='subtitle'>No invites yet.</p>"}</div>
       `;
+    } else if (state.tab === "accounts" && isAdmin) {
+      mainHtml = renderAccountsTab();
     } else {
       mainHtml = `
         <section class="panel-card">
@@ -291,21 +563,101 @@
           ${isAdmin ? `
             <div class="sidebar-section">
               <button class="nav-item ${state.tab === "admin" ? "active" : ""}" id="nav-admin">Admin: Users &amp; Projects</button>
+              <button class="nav-item ${state.tab === "accounts" ? "active" : ""}" id="nav-accounts">Admin: CLI Accounts</button>
             </div>` : ""}
           <div class="sidebar-section">
             <button class="btn-secondary" id="logout-btn">Sign Out (${esc(state.user.username)})</button>
           </div>
         </aside>
         <main class="dashboard-main">
+          ${renderHeaderSwitcher(activeProject)}
           ${errHtml}${okHtml}${mainHtml}
         </main>
       </div>
+      ${renderAddAccountModal()}
     `;
 
+    bindDashboardHandlers();
+  }
+
+  function connectOAuthTerminal(accountId) {
+    closeActivePty();
+    const host = document.getElementById("oauth-xterm-host");
+    if (!host) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    let cols = 90;
+    let rows = 24;
+    let term = null;
+    const fallbackLog = document.getElementById("oauth-xterm-fallback");
+    const fallbackForm = document.getElementById("oauth-fallback-input-form");
+
+    if (typeof window.Terminal === "function") {
+      host.innerHTML = "";
+      term = new window.Terminal({ cols, rows, cursorBlink: true });
+      if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
+        term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+      }
+      term.open(host);
+      state.ptyTerminal = term;
+    } else if (fallbackLog && fallbackForm) {
+      fallbackLog.textContent = "Connecting to OAuth login PTY...\n";
+      fallbackForm.style.display = "flex";
+    }
+
+    const wsUrl = `${proto}//${window.location.host}/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}&cols=${cols}&rows=${rows}`;
+    const ws = new WebSocket(wsUrl);
+    state.ptySocket = ws;
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "output") {
+          if (term) {
+            term.write(msg.data);
+          } else if (fallbackLog) {
+            fallbackLog.innerHTML += linkifyUrls(msg.data);
+          }
+        } else if (msg.type === "exit") {
+          const note = `\r\n[Process exited with code ${msg.code}]\r\n`;
+          if (term) term.write(note);
+          else if (fallbackLog) fallbackLog.innerHTML += esc(note);
+        } else if (msg.type === "error") {
+          const note = `\r\n[PTY error: ${msg.message}]\r\n`;
+          if (term) term.write(note);
+          else if (fallbackLog) fallbackLog.innerHTML += esc(note);
+        }
+      } catch {}
+    };
+
+    if (term) {
+      term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data }));
+        }
+      });
+      term.onResize((sz) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
+        }
+      });
+    } else if (fallbackForm) {
+      fallbackForm.onsubmit = (e) => {
+        e.preventDefault();
+        const inp = document.getElementById("oauth-fallback-input");
+        if (inp && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
+          inp.value = "";
+        }
+      };
+    }
+  }
+
+  function bindDashboardHandlers() {
     document.querySelectorAll("[data-pid]").forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         state.activeProjectId = btn.dataset.pid;
         state.tab = "overview";
+        await loadProjectCli();
         render();
       };
     });
@@ -313,12 +665,196 @@
     const navAdmin = document.getElementById("nav-admin");
     if (navAdmin) navAdmin.onclick = () => { state.tab = "admin"; render(); };
 
+    const navAccounts = document.getElementById("nav-accounts");
+    if (navAccounts) navAccounts.onclick = () => { state.tab = "accounts"; render(); };
+
     document.getElementById("logout-btn").onclick = async () => {
       try { await api("/api/auth/logout", { method: "POST" }); } catch {}
       clearSession();
       state.screen = "login";
       render();
     };
+
+    const providerSel = document.getElementById("header-cli-provider");
+    const accountSel = document.getElementById("header-cli-account");
+    if (providerSel) {
+      providerSel.onchange = async () => {
+        state.error = null; state.notice = null;
+        try {
+          state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`, {
+            method: "PUT",
+            body: JSON.stringify({ provider: providerSel.value, account_id: null }),
+          });
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+    if (accountSel) {
+      accountSel.onchange = async () => {
+        state.error = null; state.notice = null;
+        try {
+          state.projectCli = await api(`/api/projects/${state.activeProjectId}/cli`, {
+            method: "PUT",
+            body: JSON.stringify({
+              provider: providerSel.value,
+              account_id: accountSel.value || null,
+            }),
+          });
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const openModalBtn = document.getElementById("open-add-account-btn");
+    if (openModalBtn) {
+      openModalBtn.onclick = () => {
+        state.addAccountModal = { step: "create", tab: "pty", accountId: null, account: null };
+        render();
+      };
+    }
+
+    const closeModalBtn = document.getElementById("close-account-modal");
+    if (closeModalBtn) {
+      closeModalBtn.onclick = () => {
+        state.addAccountModal = null;
+        loadAuthenticatedData();
+      };
+    }
+
+    const createAccForm = document.getElementById("create-account-form");
+    if (createAccForm) {
+      createAccForm.onsubmit = async (e) => {
+        e.preventDefault();
+        state.error = null;
+        const fd = new FormData(e.target);
+        try {
+          const acc = await api("/api/admin/accounts", {
+            method: "POST",
+            body: JSON.stringify(Object.fromEntries(fd.entries())),
+          });
+          state.adminAccounts.push(acc);
+          state.addAccountModal = { step: "auth", tab: "pty", accountId: acc.id, account: acc };
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const tabPty = document.getElementById("modal-tab-pty");
+    if (tabPty) tabPty.onclick = () => { state.addAccountModal.tab = "pty"; render(); };
+
+    const tabCreds = document.getElementById("modal-tab-creds");
+    if (tabCreds) tabCreds.onclick = () => { state.addAccountModal.tab = "credentials"; render(); };
+
+    const launchPtyBtn = document.getElementById("launch-oauth-pty-btn");
+    if (launchPtyBtn && state.addAccountModal?.accountId) {
+      launchPtyBtn.onclick = () => connectOAuthTerminal(state.addAccountModal.accountId);
+    }
+
+    const credPicker = document.getElementById("cred-file-picker");
+    if (credPicker) {
+      credPicker.onchange = async () => {
+        const file = credPicker.files && credPicker.files[0];
+        if (!file) return;
+        document.getElementById("cred-filename").value = file.name;
+        document.getElementById("cred-content").value = await file.text();
+      };
+    }
+
+    const uploadCredForm = document.getElementById("upload-cred-form");
+    if (uploadCredForm && state.addAccountModal?.accountId) {
+      uploadCredForm.onsubmit = async (e) => {
+        e.preventDefault();
+        state.error = null; state.notice = null;
+        const filename = document.getElementById("cred-filename").value;
+        const content = document.getElementById("cred-content").value;
+        try {
+          await api(`/api/admin/accounts/${state.addAccountModal.accountId}/credentials`, {
+            method: "POST",
+            body: JSON.stringify({ filename, content }),
+          });
+          state.notice = `Saved ${filename}`;
+          state.adminAccounts = await api("/api/admin/accounts");
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-del-cred]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.error = null;
+        try {
+          await api(`/api/admin/accounts/${state.addAccountModal.accountId}/credentials/${encodeURIComponent(btn.dataset.delCred)}`, {
+            method: "DELETE",
+          });
+          state.adminAccounts = await api("/api/admin/accounts");
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-auth-acc]").forEach((btn) => {
+      btn.onclick = () => {
+        const acc = state.adminAccounts.find((a) => a.id === btn.dataset.authAcc);
+        if (acc) {
+          state.addAccountModal = { step: "auth", tab: "pty", accountId: acc.id, account: acc };
+          render();
+        }
+      };
+    });
+
+    document.querySelectorAll("[data-rename-acc]").forEach((btn) => {
+      btn.onclick = async () => {
+        const acc = state.adminAccounts.find((a) => a.id === btn.dataset.renameAcc);
+        const nextName = window.prompt("New account name:", acc ? acc.name : "");
+        if (!nextName) return;
+        try {
+          await api(`/api/admin/accounts/${btn.dataset.renameAcc}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: nextName }),
+          });
+          await loadAuthenticatedData();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-del-acc]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/admin/accounts/${btn.dataset.delAcc}`, { method: "DELETE" });
+          await loadAuthenticatedData();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const aclProjSel = document.getElementById("acl-project-select");
+    if (aclProjSel) {
+      aclProjSel.onchange = async () => {
+        state.aclProjectId = aclProjSel.value;
+        await loadAclProjectData(state.aclProjectId);
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-save-acl]").forEach((btn) => {
+      btn.onclick = async () => {
+        const uid = btn.dataset.saveAcl;
+        const unrestrictedBox = document.querySelector(`[data-acl-unrestricted="${uid}"]`);
+        const isUnrestricted = unrestrictedBox && unrestrictedBox.checked;
+        const allowed_accounts = isUnrestricted
+          ? null
+          : Array.from(document.querySelectorAll(`[data-acl-acc="${uid}"]:checked`)).map((el) => el.value);
+        try {
+          await api(`/api/admin/projects/${state.aclProjectId}/members/${uid}/accounts`, {
+            method: "PUT",
+            body: JSON.stringify({ allowed_accounts }),
+          });
+          state.notice = "Updated Developer account ACL.";
+          await loadAclProjectData(state.aclProjectId);
+          await loadProjectCli();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
 
     const cpForm = document.getElementById("create-project-form");
     if (cpForm) {

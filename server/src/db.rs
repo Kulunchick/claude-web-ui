@@ -90,6 +90,49 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             details TEXT,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS cli_accounts (
+            id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            profile_dir TEXT NOT NULL,
+            created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(provider, slug)
+        );
+
+        CREATE TABLE IF NOT EXISTS project_active_cli (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            active_provider TEXT NOT NULL,
+            active_account_id TEXT REFERENCES cli_accounts(id) ON DELETE SET NULL,
+            updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS project_provider_accounts (
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            account_id TEXT NOT NULL REFERENCES cli_accounts(id) ON DELETE CASCADE,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, provider)
+        );
+
+        CREATE TABLE IF NOT EXISTS project_member_acl_settings (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            restrict_accounts INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, project_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS project_member_allowed_accounts (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            account_id TEXT NOT NULL REFERENCES cli_accounts(id) ON DELETE CASCADE,
+            PRIMARY KEY (user_id, project_id, account_id)
+        );
         "#,
     )
     .execute(pool)

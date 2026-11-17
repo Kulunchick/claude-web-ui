@@ -41,3 +41,28 @@ pub fn link_dir(target: &Path, link: &Path) -> io::Result<()> {
         }
     }
 }
+
+/// Removes a directory symlink (Unix) or directory junction/symlink (Windows)
+/// without deleting the contents of its target directory.
+pub fn unlink_dir(link: &Path) -> io::Result<()> {
+    let meta = match std::fs::symlink_metadata(link) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    #[cfg(unix)]
+    {
+        if meta.file_type().is_symlink() {
+            std::fs::remove_file(link)
+        } else {
+            std::fs::remove_dir(link)
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = meta;
+        std::fs::remove_dir(link)
+    }
+}

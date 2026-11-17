@@ -95,6 +95,7 @@ impl GatewayServer {
         Router::new()
             .route("/api/health", get(|| async { "ok" }))
             .merge(auth::router(self.state.clone()))
+            .merge(accounts::router(self.state.clone()))
             .fallback(serve_embedded_ui)
             .layer(CorsLayer::permissive())
             .with_state(self.state.clone())

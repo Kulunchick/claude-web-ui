@@ -1,16 +1,9 @@
 use async_trait::async_trait;
+pub use claude_web_ui_shared::accounts::CliProvider;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CliProvider {
-    ClaudeCode,
-    Codex,
-    Antigravity,
-}
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CliInvocation {
@@ -61,6 +54,30 @@ pub enum TurnEvent {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PtyInvocation {
+    pub provider: CliProvider,
+    pub program: String,
+    pub args: Vec<String>,
+    pub working_dir: PathBuf,
+    pub env: BTreeMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[async_trait]
+pub trait PtySession: Send + Sync {
+    async fn write_input(&self, data: &[u8]) -> Result<(), String>;
+    async fn resize(&self, cols: u16, rows: u16) -> Result<(), String>;
+    async fn close(&self) -> Result<(), String>;
+}
+
+pub struct SpawnedPty {
+    pub session: Box<dyn PtySession>,
+    pub output_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    pub exit_rx: oneshot::Receiver<i32>,
+}
+
 #[async_trait]
 pub trait CliRunner: Send + Sync {
     async fn run_turn(
@@ -69,6 +86,8 @@ pub trait CliRunner: Send + Sync {
         event_tx: mpsc::UnboundedSender<TurnEvent>,
         approval_rx: mpsc::UnboundedReceiver<bool>,
     ) -> Result<(), String>;
+
+    async fn spawn_pty(&self, invocation: PtyInvocation) -> Result<SpawnedPty, String>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

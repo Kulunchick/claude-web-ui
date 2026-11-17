@@ -273,7 +273,7 @@ async fn load_accessible_projects(
     rows.iter().map(row_to_project).collect()
 }
 
-async fn record_audit_log(
+pub(crate) async fn record_audit_log(
     state: &AppState,
     user_id: Option<&str>,
     action: &str,
@@ -710,7 +710,7 @@ fn extract_project_id_from_path(path: &str) -> Option<String> {
     }
 }
 
-fn slugify(name: &str) -> String {
+pub(crate) fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
     for ch in name.trim().chars() {

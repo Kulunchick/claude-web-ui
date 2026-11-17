@@ -6,10 +6,12 @@ pub mod cron_view;
 pub mod files_git_view;
 pub mod kanban_view;
 
+use accounts_view::{AccountsManagerView, HeaderCliSwitcher};
 use auth_view::{
     AdminUsersProjectsView, AuthScreen, BootstrapAdminView, DashboardTab, InviteRedemptionView,
     LoginView, ProjectSwitcherSidebar,
 };
+use claude_web_ui_shared::accounts::{CliAccountDto, ProjectCliStateDto};
 use claude_web_ui_shared::auth::{ProjectDto, UserDto};
 use leptos::prelude::*;
 
@@ -19,6 +21,8 @@ pub fn GatewayApp(
     #[prop(optional)] user: Option<UserDto>,
     #[prop(default = Vec::new())] initial_projects: Vec<ProjectDto>,
     #[prop(default = Vec::new())] initial_users: Vec<UserDto>,
+    #[prop(default = Vec::new())] initial_accounts: Vec<CliAccountDto>,
+    #[prop(optional)] initial_project_cli: Option<ProjectCliStateDto>,
 ) -> impl IntoView {
     let initial_screen = if initialized {
         AuthScreen::Login
@@ -28,6 +32,8 @@ pub fn GatewayApp(
     let screen = RwSignal::new(initial_screen);
     let (projects, _) = signal(initial_projects);
     let (users, _) = signal(initial_users);
+    let (accounts, _) = signal(initial_accounts);
+    let (project_cli, _) = signal(initial_project_cli);
     let active_project_id = RwSignal::new(None::<String>);
     let active_tab = RwSignal::new(DashboardTab::ProjectOverview);
 
@@ -55,6 +61,7 @@ pub fn GatewayApp(
                     active_tab=active_tab
                 />
                 <main class="dashboard-main">
+                    <HeaderCliSwitcher project_cli=project_cli />
                     {move || match active_tab.get() {
                         DashboardTab::ProjectOverview => view! {
                             <section class="panel-card">
@@ -64,6 +71,9 @@ pub fn GatewayApp(
                         }.into_any(),
                         DashboardTab::AdminUsersProjects => view! {
                             <AdminUsersProjectsView users=users projects=projects />
+                        }.into_any(),
+                        DashboardTab::AdminAccounts => view! {
+                            <AccountsManagerView accounts=accounts projects=projects users=users />
                         }.into_any(),
                     }}
                 </main>

@@ -12,6 +12,7 @@ pub enum AuthScreen {
 pub enum DashboardTab {
     ProjectOverview,
     AdminUsersProjects,
+    AdminAccounts,
 }
 
 #[component]
@@ -226,6 +227,13 @@ pub fn ProjectSwitcherSidebar(
                         on:click=move |_| active_tab.set(DashboardTab::AdminUsersProjects)
                     >
                         "Admin: Users & Projects"
+                    </button>
+                    <button
+                        class="nav-item"
+                        class:active=move || active_tab.get() == DashboardTab::AdminAccounts
+                        on:click=move |_| active_tab.set(DashboardTab::AdminAccounts)
+                    >
+                        "Admin: CLI Accounts"
                     </button>
                 </div>
             </Show>

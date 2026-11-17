@@ -1,17 +1,21 @@
 use crate::traits::{
     CliInvocation, CliRunner, InlineButton, MessengerPlatform, MessengerTransport, OutboundMessage,
-    TurnEvent,
+    PtyInvocation, PtySession, SpawnedPty, TurnEvent,
 };
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Default)]
 pub struct FakeCliRunner {
     pub invocations: Arc<Mutex<Vec<CliInvocation>>>,
     pub scripted_turns: Arc<Mutex<VecDeque<Vec<TurnEvent>>>>,
     pub approval_decisions: Arc<Mutex<Vec<bool>>>,
+    pub pty_invocations: Arc<Mutex<Vec<PtyInvocation>>>,
+    pub scripted_pty_outputs: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    pub pty_inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+    pub pty_resizes: Arc<Mutex<Vec<(u16, u16)>>>,
 }
 
 impl FakeCliRunner {
@@ -28,6 +32,64 @@ impl FakeCliRunner {
 
     pub fn recorded_invocations(&self) -> Vec<CliInvocation> {
         self.invocations.lock().expect("poisoned mutex").clone()
+    }
+
+    pub fn push_pty_output(&self, bytes: Vec<u8>) {
+        self.scripted_pty_outputs
+            .lock()
+            .expect("poisoned mutex")
+            .push_back(bytes);
+    }
+
+    pub fn recorded_pty_invocations(&self) -> Vec<PtyInvocation> {
+        self.pty_invocations.lock().expect("poisoned mutex").clone()
+    }
+
+    pub fn recorded_pty_inputs(&self) -> Vec<Vec<u8>> {
+        self.pty_inputs.lock().expect("poisoned mutex").clone()
+    }
+
+    pub fn recorded_pty_resizes(&self) -> Vec<(u16, u16)> {
+        self.pty_resizes.lock().expect("poisoned mutex").clone()
+    }
+}
+
+struct FakePtySession {
+    pty_inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+    pty_resizes: Arc<Mutex<Vec<(u16, u16)>>>,
+    output_tx: mpsc::UnboundedSender<Vec<u8>>,
+    exit_tx: Mutex<Option<oneshot::Sender<i32>>>,
+}
+
+#[async_trait]
+impl PtySession for FakePtySession {
+    async fn write_input(&self, data: &[u8]) -> Result<(), String> {
+        self.pty_inputs
+            .lock()
+            .expect("poisoned mutex")
+            .push(data.to_vec());
+        if data.contains(&b'\r') || data.contains(&b'\n') {
+            let _ = self.output_tx.send(b"Authentication complete.\r\n".to_vec());
+            if let Some(tx) = self.exit_tx.lock().expect("poisoned mutex").take() {
+                let _ = tx.send(0);
+            }
+        }
+        Ok(())
+    }
+
+    async fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        self.pty_resizes
+            .lock()
+            .expect("poisoned mutex")
+            .push((cols, rows));
+        Ok(())
+    }
+
+    async fn close(&self) -> Result<(), String> {
+        if let Some(tx) = self.exit_tx.lock().expect("poisoned mutex").take() {
+            let _ = tx.send(0);
+        }
+        Ok(())
     }
 }
 
@@ -74,6 +136,42 @@ impl CliRunner for FakeCliRunner {
             }
         }
         Ok(())
+    }
+
+    async fn spawn_pty(&self, invocation: PtyInvocation) -> Result<SpawnedPty, String> {
+        let initial_bytes = self
+            .scripted_pty_outputs
+            .lock()
+            .expect("poisoned mutex")
+            .pop_front()
+            .unwrap_or_else(|| {
+                format!(
+                    "Starting {} OAuth login in {}...\r\n",
+                    invocation.provider.display_name(),
+                    invocation.working_dir.display()
+                )
+                .into_bytes()
+            });
+
+        self.pty_invocations
+            .lock()
+            .expect("poisoned mutex")
+            .push(invocation);
+
+        let (output_tx, output_rx) = mpsc::unbounded_channel();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let _ = output_tx.send(initial_bytes);
+
+        Ok(SpawnedPty {
+            session: Box::new(FakePtySession {
+                pty_inputs: self.pty_inputs.clone(),
+                pty_resizes: self.pty_resizes.clone(),
+                output_tx,
+                exit_tx: Mutex::new(Some(exit_tx)),
+            }),
+            output_rx,
+            exit_rx,
+        })
     }
 }
 

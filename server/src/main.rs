@@ -1,4 +1,5 @@
-use claude_web_ui_server::fakes::{FakeCliRunner, FakeMessengerTransport};
+use claude_web_ui_server::accounts::PortablePtyCliRunner;
+use claude_web_ui_server::fakes::FakeMessengerTransport;
 use claude_web_ui_server::{GatewayConfig, GatewayServer};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = GatewayServer::new(
         config,
-        Arc::new(FakeCliRunner::new()),
+        Arc::new(PortablePtyCliRunner::new()),
         Arc::new(FakeMessengerTransport::new()),
     )
     .await?;
