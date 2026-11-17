@@ -18,79 +18,81 @@ pub enum DashboardTab {
 
 #[component]
 pub fn BootstrapAdminView(
-    #[prop(optional)] initial_error: Option<String>,
+    #[prop(optional_no_strip)] initial_error: Option<String>,
 ) -> impl IntoView {
-    let (username, set_username) = signal(String::new());
-    let (email, set_email) = signal(String::new());
-    let (password, set_password) = signal(String::new());
-    let error = RwSignal::new(initial_error);
-
     view! {
-        <section class="auth-card" data-view="bootstrap-admin">
+        <form method="post" class="auth-card" id="bootstrap-form" data-view="bootstrap-admin">
             <h2>"Initialize Gateway Admin"</h2>
             <p class="subtitle">"Create the first administrator account to secure this 24/7 gateway."</p>
-            <Show when=move || error.get().is_some()>
-                <div class="alert-error">{move || error.get().unwrap_or_default()}</div>
-            </Show>
+            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
             <div class="form-group">
-                <label>"Username"</label>
+                <label for="auth-username">"Username"</label>
                 <input
+                    id="auth-username"
+                    name="username"
+                    required
+                    autocomplete="username"
                     type="text"
                     placeholder="admin"
-                    prop:value=move || username.get()
-                    on:input=move |ev| set_username.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
-                <label>"Email"</label>
+                <label for="auth-email">"Email"</label>
                 <input
+                    id="auth-email"
+                    name="email"
+                    required
+                    autocomplete="email"
                     type="email"
                     placeholder="admin@example.com"
-                    prop:value=move || email.get()
-                    on:input=move |ev| set_email.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
-                <label>"Password"</label>
+                <label for="auth-password">"Password"</label>
                 <input
+                    id="auth-password"
+                    name="password"
+                    required
+                    autocomplete="new-password"
                     type="password"
                     placeholder="Minimum 8 characters"
-                    prop:value=move || password.get()
-                    on:input=move |ev| set_password.set(event_target_value(&ev))
                 />
             </div>
             <button class="btn-primary" type="submit">"Create Admin Account"</button>
-        </section>
+        </form>
     }
 }
 
 #[component]
 pub fn LoginView(
+    #[prop(optional_no_strip)] initial_error: Option<String>,
     #[prop(optional)] on_switch_invite: Option<Callback<()>>,
 ) -> impl IntoView {
-    let (identifier, set_identifier) = signal(String::new());
-    let (password, set_password) = signal(String::new());
-
     view! {
-        <section class="auth-card" data-view="login">
+        <form method="post" class="auth-card" id="login-form" data-view="login">
             <h2>"Sign In to Claude Web UI"</h2>
             <p class="subtitle">"Authenticate with your username or email and password."</p>
+            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
             <div class="form-group">
-                <label>"Username or Email"</label>
+                <label for="auth-identifier">"Username or Email"</label>
                 <input
+                    id="auth-identifier"
+                    name="identifier"
+                    required
+                    autocomplete="username"
                     type="text"
                     placeholder="username or email"
-                    prop:value=move || identifier.get()
-                    on:input=move |ev| set_identifier.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
-                <label>"Password"</label>
+                <label for="auth-password">"Password"</label>
                 <input
+                    id="auth-password"
+                    name="password"
+                    required
+                    autocomplete="current-password"
                     type="password"
                     placeholder="Password"
-                    prop:value=move || password.get()
-                    on:input=move |ev| set_password.set(event_target_value(&ev))
                 />
             </div>
             <button class="btn-primary" type="submit">"Sign In"</button>
@@ -107,55 +109,60 @@ pub fn LoginView(
                     "Have an invite code? Redeem Invite"
                 </button>
             </Show>
-        </section>
+        </form>
     }
 }
 
 #[component]
 pub fn InviteRedemptionView(
+    #[prop(optional_no_strip)] initial_error: Option<String>,
     #[prop(optional)] prefilled_code: Option<String>,
     #[prop(optional)] on_switch_login: Option<Callback<()>>,
 ) -> impl IntoView {
-    let (code, set_code) = signal(prefilled_code.unwrap_or_default());
-    let (username, set_username) = signal(String::new());
-    let (email, set_email) = signal(String::new());
-    let (password, set_password) = signal(String::new());
-
     view! {
-        <section class="auth-card" data-view="invite-redemption">
+        <form method="post" class="auth-card" id="invite-form" data-view="invite-redemption">
             <h2>"Redeem Invite"</h2>
             <p class="subtitle">"Enter your single-use invite code and set your account credentials."</p>
+            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
             <div class="form-group">
-                <label>"Invite Code"</label>
+                <label for="auth-code">"Invite Code"</label>
                 <input
+                    id="auth-code"
+                    name="code"
+                    required
                     type="text"
                     placeholder="inv_..."
-                    prop:value=move || code.get()
-                    on:input=move |ev| set_code.set(event_target_value(&ev))
+                    value=prefilled_code.unwrap_or_default()
                 />
             </div>
             <div class="form-group">
-                <label>"Username"</label>
+                <label for="auth-username">"Username"</label>
                 <input
+                    id="auth-username"
+                    name="username"
+                    required
+                    autocomplete="username"
                     type="text"
-                    prop:value=move || username.get()
-                    on:input=move |ev| set_username.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
-                <label>"Email"</label>
+                <label for="auth-email">"Email"</label>
                 <input
+                    id="auth-email"
+                    name="email"
+                    required
+                    autocomplete="email"
                     type="email"
-                    prop:value=move || email.get()
-                    on:input=move |ev| set_email.set(event_target_value(&ev))
                 />
             </div>
             <div class="form-group">
-                <label>"Password"</label>
+                <label for="auth-password">"Password"</label>
                 <input
+                    id="auth-password"
+                    name="password"
+                    required
+                    autocomplete="new-password"
                     type="password"
-                    prop:value=move || password.get()
-                    on:input=move |ev| set_password.set(event_target_value(&ev))
                 />
             </div>
             <button class="btn-primary" type="submit">"Redeem & Join"</button>
@@ -172,7 +179,47 @@ pub fn InviteRedemptionView(
                     "Back to Sign In"
                 </button>
             </Show>
-        </section>
+        </form>
+    }
+}
+
+#[component]
+pub fn ProjectList(
+    projects: ReadSignal<Vec<ProjectDto>>,
+    active_project_id: ReadSignal<Option<String>>,
+    on_select: Callback<String>,
+) -> impl IntoView {
+    view! {
+        <ul class="project-list" data-view="project-switcher">
+            <Show when=move || projects.with(Vec::is_empty)>
+                <li class="subtitle">"No assigned projects"</li>
+            </Show>
+            <For
+                each=move || projects.get()
+                key=|project| project.id.clone()
+                children=move |project| {
+                    let id = project.id.clone();
+                    let select_id = project.id.clone();
+                    view! {
+                        <li>
+                            <button
+                                type="button"
+                                class="project-item"
+                                class:active=move || active_project_id.with(|active| active.as_ref() == Some(&id))
+                                aria-pressed=move || active_project_id.with(|active| active.as_ref() == Some(&select_id)).to_string()
+                                on:click={
+                                    let project_id = project.id;
+                                    move |_| on_select.run(project_id.clone())
+                                }
+                            >
+                                <span class="project-name">{project.name}</span>
+                                <span class="project-path">{project.workspace_path}</span>
+                            </button>
+                        </li>
+                    }
+                }
+            />
+        </ul>
     }
 }
 
@@ -194,31 +241,14 @@ pub fn ProjectSwitcherSidebar(
             </div>
             <div class="sidebar-section">
                 <h3>"Projects"</h3>
-                <ul class="project-list">
-                    <For
-                        each=move || projects.get()
-                        key=|p| p.id.clone()
-                        children=move |project| {
-                            let pid = project.id.clone();
-                            let pid_select = project.id.clone();
-                            view! {
-                                <li>
-                                    <button
-                                        class="project-item"
-                                        class:active=move || active_project_id.get().as_deref() == Some(pid.as_str())
-                                        on:click=move |_| {
-                                            active_project_id.set(Some(pid_select.clone()));
-                                            active_tab.set(DashboardTab::ProjectOverview);
-                                        }
-                                    >
-                                        <span class="project-name">{project.name}</span>
-                                        <span class="project-path">{project.workspace_path}</span>
-                                    </button>
-                                </li>
-                            }
-                        }
-                    />
-                </ul>
+                <ProjectList
+                    projects=projects
+                    active_project_id=active_project_id.read_only()
+                    on_select=Callback::new(move |id| {
+                        active_project_id.set(Some(id));
+                        active_tab.set(DashboardTab::ProjectOverview);
+                    })
+                />
             </div>
             <div class="sidebar-section">
                 <h3>"Workspace"</h3>

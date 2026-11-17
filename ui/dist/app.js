@@ -78,10 +78,12 @@
   };
 
   const app = document.getElementById("app");
+  let leptos;
 
   if (desktop) {
     window.addEventListener("cwu:desktop-token", () => {
       state.accessToken = window.__CWU_DESKTOP_ACCESS_TOKEN;
+      if (!leptos) return;
       if (state.user) {
         connectChatStream(state.activeProjectId);
       } else {
@@ -441,6 +443,7 @@
   }
 
   function render() {
+    leptos.unmount_gateway_view();
     if (!state.user) {
       renderAuth();
     } else {
@@ -448,105 +451,59 @@
     }
   }
 
-  function renderAuth() {
-    const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
-    if (state.screen === "bootstrap") {
-      app.innerHTML = `
-        <main class="auth-shell">
-          <form class="auth-card" id="bootstrap-form">
-            <h2>Initialize Gateway Admin</h2>
-            <p class="subtitle">Create the first administrator account to secure this gateway.</p>
-            ${errHtml}
-            <div class="form-group"><label>Username</label><input name="username" required /></div>
-            <div class="form-group"><label>Email</label><input name="email" type="email" required /></div>
-            <div class="form-group"><label>Password</label><input name="password" type="password" required /></div>
-            <button class="btn-primary" type="submit">Create Admin Account</button>
-          </form>
-        </main>`;
-      document.getElementById("bootstrap-form").onsubmit = async (e) => {
-        e.preventDefault();
-        state.error = null;
-        const fd = new FormData(e.target);
-        try {
-          const auth = await api("/api/auth/bootstrap", {
-            method: "POST",
-            body: JSON.stringify(Object.fromEntries(fd.entries())),
-          });
-          saveTokens(auth);
-          await loadAuthenticatedData();
-        } catch (err) {
-          state.error = err.message;
-          render();
-        }
-      };
-      return;
-    }
-
-    if (state.screen === "invite") {
-      const codeParam = new URLSearchParams(window.location.search).get("invite") || "";
-      app.innerHTML = `
-        <main class="auth-shell">
-          <form class="auth-card" id="invite-form">
-            <h2>Redeem Invite</h2>
-            <p class="subtitle">Enter your single-use invite code and create your account.</p>
-            ${errHtml}
-            <div class="form-group"><label>Invite Code</label><input name="code" value="${esc(codeParam)}" required /></div>
-            <div class="form-group"><label>Username</label><input name="username" required /></div>
-            <div class="form-group"><label>Email</label><input name="email" type="email" required /></div>
-            <div class="form-group"><label>Password</label><input name="password" type="password" required /></div>
-            <button class="btn-primary" type="submit">Redeem &amp; Join</button>
-            <button class="btn-link" type="button" id="to-login">Back to Sign In</button>
-          </form>
-        </main>`;
-      document.getElementById("to-login").onclick = () => { state.error = null; state.screen = "login"; render(); };
-      document.getElementById("invite-form").onsubmit = async (e) => {
-        e.preventDefault();
-        state.error = null;
-        const fd = new FormData(e.target);
-        try {
-          const auth = await api("/api/auth/invites/redeem", {
-            method: "POST",
-            body: JSON.stringify(Object.fromEntries(fd.entries())),
-          });
-          saveTokens(auth);
-          await loadAuthenticatedData();
-        } catch (err) {
-          state.error = err.message;
-          render();
-        }
-      };
-      return;
-    }
-
-    app.innerHTML = `
-      <main class="auth-shell">
-        <form class="auth-card" id="login-form">
-          <h2>Sign In to Claude Web UI</h2>
-          <p class="subtitle">Authenticate with your username or email and password.</p>
-          ${errHtml}
-          <div class="form-group"><label>Username or Email</label><input name="identifier" required /></div>
-          <div class="form-group"><label>Password</label><input name="password" type="password" required /></div>
-          <button class="btn-primary" type="submit">Sign In</button>
-          <button class="btn-link" type="button" id="to-invite">Have an invite code? Redeem Invite</button>
-        </form>
-      </main>`;
-    document.getElementById("to-invite").onclick = () => { state.error = null; state.screen = "invite"; render(); };
-    document.getElementById("login-form").onsubmit = async (e) => {
-      e.preventDefault();
+  window.addEventListener("cwu:auth-screen", ({ detail: screen }) => {
+    queueMicrotask(() => {
+      if (state.user || app.querySelector(".auth-card button[type='submit']:disabled")) return;
       state.error = null;
-      const fd = new FormData(e.target);
-      try {
-        const auth = await api("/api/auth/login", {
-          method: "POST",
-          body: JSON.stringify(Object.fromEntries(fd.entries())),
-        });
-        saveTokens(auth);
-        await loadAuthenticatedData();
-      } catch (err) {
-        state.error = err.message;
-        render();
-      }
-    };
+      state.screen = screen;
+      render();
+    });
+  });
+
+  let changingProject = false;
+  window.addEventListener("cwu:select-project", async ({ detail: projectId }) => {
+    if (!state.user || changingProject || !state.projects.some((proj) => proj.id === projectId)) return;
+    changingProject = true;
+    try {
+      state.activeProjectId = projectId;
+      state.projectTab = "chat";
+      state.activeSessionId = null;
+      state.tab = "overview";
+      state.activeFile = null;
+      state.editorText = "";
+      state.editorDirty = false;
+      state.diffPath = null;
+      await loadProjectCli();
+      connectChatStream(state.activeProjectId);
+      await loadProjectWorkspace();
+      render();
+    } finally {
+      changingProject = false;
+    }
+  });
+
+  app.addEventListener("submit", async (event) => {
+    const form = event.target;
+    if (state.user || !form.matches(".auth-card")) return;
+    event.preventDefault();
+    const submit = form.querySelector("button[type='submit']");
+    if (submit.disabled) return;
+    submit.disabled = true;
+    try {
+      const fields = JSON.stringify(Object.fromEntries(new FormData(form)));
+      const auth = JSON.parse(await leptos.submit_auth(state.screen, fields));
+      saveTokens(auth);
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = String(error.message || error);
+      render();
+    }
+  });
+
+  function renderAuth() {
+    const invite = new URLSearchParams(window.location.search).get("invite") || "";
+    app.replaceChildren();
+    leptos.mount_auth(app, state.screen, state.error, invite);
   }
 
   function renderHeaderSwitcher(activeProject) {
@@ -940,15 +897,6 @@
     const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
     const okHtml = state.notice ? `<div class="alert-success">${esc(state.notice)}</div>` : "";
 
-    const projectItems = state.projects.map((p) => `
-      <li>
-        <button class="project-item ${p.id === state.activeProjectId ? "active" : ""}" data-pid="${esc(p.id)}">
-          <span>${esc(p.name)}</span>
-          <span class="project-path">${esc(p.workspace_path)}</span>
-        </button>
-      </li>
-    `).join("");
-
     let mainHtml = "";
     if (state.tab === "admin" && isAdmin) {
       const projectOptions = state.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
@@ -1119,7 +1067,7 @@
           </div>
           <div class="sidebar-section">
             <h3>Projects</h3>
-            <ul class="project-list">${projectItems || "<li class='subtitle'>No assigned projects</li>"}</ul>
+            <div id="project-list"></div>
           </div>
           <div class="sidebar-section">
             <h3>Workspace</h3>
@@ -1144,6 +1092,7 @@
       ${renderAddAccountModal()}
     `;
 
+    leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
     bindDashboardHandlers();
   }
 
@@ -1617,23 +1566,6 @@
 
   function bindDashboardHandlers() {
     bindKanbanHandlers();
-    document.querySelectorAll("[data-pid]").forEach((btn) => {
-      btn.onclick = async () => {
-        state.activeProjectId = btn.dataset.pid;
-        state.projectTab = "chat";
-        state.activeSessionId = null;
-        state.tab = "overview";
-        state.activeFile = null;
-        state.editorText = "";
-        state.editorDirty = false;
-        state.diffPath = null;
-        await loadProjectCli();
-        connectChatStream(state.activeProjectId);
-        await loadProjectWorkspace();
-        render();
-      };
-    });
-
     const projTabChat = document.getElementById("proj-tab-chat");
     if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
 
@@ -2396,5 +2328,18 @@
   }
 
   setInterval(() => { if (state.projectTab === "kanban" && state.user && !kanban.editing && !document.querySelector(".kanban-card:active")) void loadKanban().catch(() => {}); }, 1500);
-  boot();
+  async function start() {
+    try {
+      const bindings = await import("/leptos_gateway.js");
+      await bindings.default();
+      leptos = bindings;
+    } catch (error) {
+      console.error("Unable to load the Gateway UI", error);
+      app.textContent = "Unable to load the Gateway UI. Reload to try again.";
+      return;
+    }
+    await boot();
+  }
+
+  void start();
 })();
