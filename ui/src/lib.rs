@@ -15,6 +15,7 @@ use chat_view::ChatWorkspaceView;
 use claude_web_ui_shared::accounts::{CliAccountDto, ProjectCliStateDto};
 use claude_web_ui_shared::auth::{ProjectDto, UserDto};
 use claude_web_ui_shared::chat::{ChatSessionDto, ChatTurnDto};
+use files_git_view::WorkspaceFilesGitView;
 use leptos::prelude::*;
 
 #[component]
@@ -61,6 +62,7 @@ pub fn GatewayApp(
         .into_any(),
         Some(current_user) => {
             let chat_user = current_user.clone();
+            let current_role = current_user.role;
             view! {
                 <div class="dashboard-shell">
                     <ProjectSwitcherSidebar
@@ -77,15 +79,22 @@ pub fn GatewayApp(
                                     .get()
                                     .and_then(|pid| projects.get().into_iter().find(|p| p.id == pid));
                                 match selected {
-                                    Some(proj) => view! {
-                                        <ChatWorkspaceView
-                                            project=proj
-                                            current_user=chat_user.clone()
-                                            sessions=sessions
-                                            active_session_id=active_session_id
-                                            turns=turns
-                                        />
-                                    }.into_any(),
+                                    Some(proj) => {
+                                        let proj_id = proj.id.clone();
+                                        view! {
+                                            <ChatWorkspaceView
+                                                project=proj
+                                                current_user=chat_user.clone()
+                                                sessions=sessions
+                                                active_session_id=active_session_id
+                                                turns=turns
+                                            />
+                                            <WorkspaceFilesGitView
+                                                project_id=proj_id
+                                                user_role=current_role
+                                            />
+                                        }.into_any()
+                                    }
                                     None => view! {
                                         <section class="panel-card">
                                             <h2>"Project Workspace"</h2>

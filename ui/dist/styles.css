@@ -456,3 +456,198 @@ textarea {
 .chat-composer {
   margin-top: 10px;
 }
+
+.workspace-header-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.files-git-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle-label input {
+  width: auto;
+}
+
+.files-git-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr 420px;
+  gap: 16px;
+  align-items: start;
+}
+.pane-head, .editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pane-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.new-file-form {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.file-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-scroll {
+  max-height: 600px;
+  overflow: auto;
+}
+
+.tree-node-btn {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.tree-node-btn:hover, .tree-node-btn.active {
+  background: rgba(124, 92, 255, 0.16);
+}
+
+.code-editor {
+  width: 100%;
+  min-height: 520px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0b0d12;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.git-group-label {
+  margin: 12px 0 6px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.git-change-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.git-badge {
+  display: inline-block;
+  min-width: 18px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 4px;
+}
+
+.git-badge.staged { background: rgba(46, 160, 67, 0.25); color: #8ee59c; }
+.git-badge.unstaged { background: rgba(210, 153, 34, 0.25); color: #f0c674; }
+.git-badge.untracked { background: rgba(124, 92, 255, 0.25); color: #c2b3ff; }
+
+.diff-unified {
+  margin: 0;
+  padding: 10px;
+  background: #0b0d12;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  overflow: auto;
+  max-height: 320px;
+}
+
+.diff-add { color: #8ee59c; background: rgba(46, 160, 67, 0.14); }
+.diff-rem { color: #ff9a9a; background: rgba(229, 83, 83, 0.14); }
+.diff-meta { color: #9ab4ff; }
+
+.diff-split-container {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0d12;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+}
+
+.diff-file-title, .diff-hunk-header {
+  padding: 4px 8px;
+  background: var(--surface-2);
+  color: #9ab4ff;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.diff-cell {
+  display: flex;
+  gap: 6px;
+  padding: 2px 6px;
+  border-right: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-cell.diff-added { background: rgba(46, 160, 67, 0.14); color: #8ee59c; }
+.diff-cell.diff-removed { background: rgba(229, 83, 83, 0.14); color: #ff9a9a; }
+.diff-cell.diff-empty { background: rgba(255, 255, 255, 0.02); }
+.diff-ln { color: var(--muted); min-width: 24px; user-select: none; }
+
+.commit-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.commit-msg { flex: 1; }
+.commit-meta { color: var(--muted); font-size: 0.75rem; }
