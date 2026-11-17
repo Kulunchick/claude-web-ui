@@ -801,6 +801,9 @@ dependencies = [
  "leptos",
  "serde",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
