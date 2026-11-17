@@ -24,6 +24,14 @@
     addAccountModal: null,
     ptySocket: null,
     ptyTerminal: null,
+    chatSocket: null,
+    sessions: [],
+    activeSessionId: null,
+    activeSessionDetail: null,
+    sessionSearch: "",
+    showProjectTerminal: false,
+    terminalMode: "shell",
+    schedulerStatus: null,
     error: null,
     notice: null,
   };
@@ -57,6 +65,13 @@
     }
   }
 
+  function closeChatSocket() {
+    if (state.chatSocket) {
+      try { state.chatSocket.close(); } catch {}
+      state.chatSocket = null;
+    }
+  }
+
   function saveTokens(auth) {
     state.accessToken = auth.access_token;
     state.refreshToken = auth.refresh_token;
@@ -67,6 +82,7 @@
 
   function clearSession() {
     closeActivePty();
+    closeChatSocket();
     state.accessToken = null;
     state.refreshToken = null;
     state.user = null;
@@ -74,6 +90,10 @@
     state.projectCli = null;
     state.adminAccounts = [];
     state.addAccountModal = null;
+    state.sessions = [];
+    state.activeSessionId = null;
+    state.activeSessionDetail = null;
+    state.showProjectTerminal = false;
     localStorage.removeItem("cwu_access_token");
     localStorage.removeItem("cwu_refresh_token");
   }
@@ -107,6 +127,9 @@
   async function loadProjectCli() {
     if (!state.activeProjectId) {
       state.projectCli = null;
+      state.sessions = [];
+      state.activeSessionId = null;
+      state.activeSessionDetail = null;
       return;
     }
     try {
@@ -114,6 +137,55 @@
     } catch {
       state.projectCli = null;
     }
+    await loadProjectSessions();
+  }
+
+  async function loadProjectSessions() {
+    if (!state.activeProjectId) {
+      state.sessions = [];
+      state.activeSessionDetail = null;
+      return;
+    }
+    try {
+      const q = state.sessionSearch ? `?q=${encodeURIComponent(state.sessionSearch)}` : "";
+      state.sessions = await api(`/api/projects/${state.activeProjectId}/sessions${q}`);
+      if (state.activeSessionId && !state.sessions.some((s) => s.id === state.activeSessionId)) {
+        state.activeSessionId = state.sessions.length > 0 ? state.sessions[0].id : null;
+      } else if (!state.activeSessionId && state.sessions.length > 0) {
+        state.activeSessionId = state.sessions[0].id;
+      }
+      if (state.activeSessionId) {
+        state.activeSessionDetail = await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}`);
+      } else {
+        state.activeSessionDetail = null;
+      }
+      state.schedulerStatus = await api(`/api/projects/${state.activeProjectId}/scheduler`);
+    } catch {
+      state.sessions = [];
+      state.activeSessionDetail = null;
+    }
+  }
+
+  function connectChatStream(projectId) {
+    closeChatSocket();
+    if (!projectId || !state.accessToken) return;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${proto}//${window.location.host}/api/projects/${encodeURIComponent(projectId)}/chat/ws?token=${encodeURIComponent(state.accessToken)}`;
+    const ws = new WebSocket(wsUrl);
+    state.chatSocket = ws;
+    ws.onmessage = async (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "scheduler_status") {
+          state.schedulerStatus = msg.status;
+          return;
+        }
+        if (msg.session_id === state.activeSessionId) {
+          await loadProjectSessions();
+          render();
+        }
+      } catch {}
+    };
   }
 
   async function loadAclProjectData(projectId) {
@@ -144,6 +216,9 @@
       if (state.aclProjectId) {
         await loadAclProjectData(state.aclProjectId);
       }
+    }
+    if (state.activeProjectId) {
+      connectChatStream(state.activeProjectId);
     }
     render();
   }
@@ -541,12 +616,7 @@
     } else if (state.tab === "accounts" && isAdmin) {
       mainHtml = renderAccountsTab();
     } else {
-      mainHtml = `
-        <section class="panel-card">
-          <h2>${activeProject ? esc(activeProject.name) : "No Project Selected"}</h2>
-          <p class="subtitle">${activeProject ? esc(activeProject.workspace_path) : "Ask an Admin to assign you to a project workspace."}</p>
-        </section>
-      `;
+      mainHtml = renderProjectWorkspace(activeProject);
     }
 
     app.innerHTML = `
@@ -580,16 +650,166 @@
     bindDashboardHandlers();
   }
 
-  function connectOAuthTerminal(accountId) {
+  function renderTurnEvent(ev) {
+    switch (ev.type) {
+      case "text_delta":
+        return `<div class="event-text">${esc(ev.text)}</div>`;
+      case "thinking_delta":
+        return `<details class="event-thinking"><summary>Thinking</summary><pre>${esc(ev.text)}</pre></details>`;
+      case "tool_call_start":
+        return `<div class="event-tool-card"><strong>Tool: ${esc(ev.name)}</strong><pre>${esc(JSON.stringify(ev.input, null, 2))}</pre></div>`;
+      case "tool_call_result":
+        return `<div class="event-tool-result ${ev.is_error ? "error" : ""}"><pre>${esc(ev.output)}</pre></div>`;
+      case "subagent_start":
+        return `<div class="role-badge">Subagent started: ${esc(ev.name)}</div>`;
+      case "subagent_end":
+        return `<div class="role-badge">Subagent finished: ${esc(ev.id)}</div>`;
+      case "permission_request":
+        return `<div class="subtitle">Requested approval for ${esc(ev.tool_name)}</div>`;
+      case "turn_complete":
+        return ev.result_text ? `<div class="event-complete">${esc(ev.result_text)}</div>` : "";
+      case "turn_error":
+        return `<div class="alert-error">${esc(ev.message)}</div>`;
+      default:
+        return "";
+    }
+  }
+
+  function renderProjectWorkspace(activeProject) {
+    if (!activeProject) {
+      return `
+        <section class="panel-card">
+          <h2>No Project Selected</h2>
+          <p class="subtitle">Ask an Admin to assign you to a project workspace.</p>
+        </section>`;
+    }
+    const isViewer = state.user.role === "viewer";
+    const detail = state.activeSessionDetail;
+    const activeSess = detail ? detail.session : state.sessions.find((s) => s.id === state.activeSessionId) || null;
+    const sessionListHtml = state.sessions.map((s) => `
+      <li>
+        <button class="session-item ${s.id === state.activeSessionId ? "active" : ""}" data-sid="${esc(s.id)}">
+          <div class="panel-header-row" style="margin-bottom:4px;">
+            <strong>${esc(s.title)}</strong>
+            <span class="role-badge">${esc(PROVIDER_LABELS[s.provider] || s.provider)}</span>
+          </div>
+          <div class="subtitle" style="margin:0;font-size:0.78rem;">
+            <span>${esc(s.source)}</span>
+            ${s.native_session_id ? ` • <code>${esc(s.native_session_id)}</code>` : ""}
+          </div>
+        </button>
+      </li>
+    `).join("");
+
+    const nativeHtml = detail && detail.native_messages && detail.native_messages.length > 0 && (!detail.turns || detail.turns.length === 0)
+      ? detail.native_messages.map((m) => `
+        <article class="turn-card">
+          <strong>${esc(m.role)}${m.tool_name ? ` (${esc(m.tool_name)})` : ""}</strong>
+          <pre class="event-text">${esc(m.text)}</pre>
+        </article>`).join("")
+      : "";
+
+    const turnsHtml = detail && detail.turns ? detail.turns.map((t) => {
+      const pending = t.pending_permission;
+      const approvalCard = pending && !isViewer ? `
+        <div class="approval-card" data-view="approval-prompt">
+          <strong>Permission Request: ${esc(pending.tool_name)}</strong>
+          <pre>${esc(JSON.stringify(pending.input, null, 2))}</pre>
+          <div class="btn-group">
+            <button class="btn-primary" data-allow-turn="${esc(t.id)}" data-req-id="${esc(pending.request_id)}" type="button">Allow</button>
+            <button class="btn-danger" data-deny-turn="${esc(t.id)}" data-req-id="${esc(pending.request_id)}" type="button">Deny</button>
+          </div>
+        </div>` : "";
+      return `
+        <article class="turn-card">
+          <div class="panel-header-row" style="margin-bottom:6px;">
+            <strong>Prompt</strong>
+            <span class="role-badge">${esc(t.status)}</span>
+          </div>
+          <p style="margin:0 0 8px;">${esc(t.prompt)}</p>
+          <div class="turn-events">${(t.events || []).map(renderTurnEvent).join("")}</div>
+          ${t.error_message ? `<div class="alert-error">${esc(t.error_message)}</div>` : ""}
+          ${approvalCard}
+        </article>`;
+    }).join("") : "";
+
+    const approvalMode = activeSess ? activeSess.approval_mode : "full_auto";
+    const approvalLabel = approvalMode === "interactive" ? "Mode: Interactive Approval" : "Mode: Full Auto";
+    const hasActiveTurn = state.schedulerStatus && state.schedulerStatus.active_session_id === state.activeSessionId;
+
+    const terminalHtml = state.showProjectTerminal && !isViewer ? `
+      <div class="panel-card" style="margin-top:14px;">
+        <div class="panel-header-row">
+          <strong>Project Terminal (xterm.js)</strong>
+          <div class="btn-group">
+            <button class="btn-secondary" id="term-mode-shell" type="button">Workspace Shell</button>
+            <button class="btn-secondary" id="term-mode-cli" type="button">Resume CLI</button>
+            <button class="btn-secondary" id="close-project-term" type="button">Close</button>
+          </div>
+        </div>
+        <div id="project-xterm-host" class="xterm-container">
+          <pre id="project-xterm-fallback" class="xterm-fallback-log">Connecting to project terminal...</pre>
+          <form id="project-xterm-fallback-form" style="display:none; gap:8px;">
+            <input id="project-xterm-fallback-input" placeholder="Type command and press Enter..." />
+            <button class="btn-secondary" type="submit">Send</button>
+          </form>
+        </div>
+      </div>` : "";
+
+    return `
+      <section class="chat-workspace" data-view="chat-workspace">
+        <aside class="chat-sessions-panel panel-card" data-view="session-list">
+          <div class="panel-header-row">
+            <h3>Sessions</h3>
+            ${!isViewer ? `<button class="btn-primary" id="new-chat-session-btn" type="button">+ New Chat</button>` : ""}
+          </div>
+          <div class="form-group">
+            <input id="session-search-input" type="search" placeholder="Search sessions..." value="${esc(state.sessionSearch)}" />
+          </div>
+          <ul class="session-list">${sessionListHtml || "<li class='subtitle'>No sessions yet.</li>"}</ul>
+        </aside>
+
+        <div class="chat-main-panel panel-card" data-view="chat-stream">
+          <div class="panel-header-row">
+            <div>
+              <h2 style="margin:0;">${esc(activeProject.name)}</h2>
+              <p class="project-path" style="margin:4px 0 0;">${esc(activeProject.workspace_path)}</p>
+            </div>
+            ${!isViewer ? `
+              <div class="btn-group">
+                ${activeSess ? `<button class="btn-secondary" id="toggle-approval-mode-btn" type="button">${approvalLabel}</button>` : ""}
+                <button class="btn-secondary" id="toggle-project-terminal-btn" type="button">${state.showProjectTerminal ? "Hide Terminal" : "Project Terminal"}</button>
+                ${activeSess && hasActiveTurn ? `<button class="btn-danger" id="stop-active-turn-btn" type="button">Stop</button>` : ""}
+              </div>` : `<span class="role-badge">Read-Only Stream</span>`}
+          </div>
+
+          <div class="chat-feed">
+            ${nativeHtml}${turnsHtml || (!nativeHtml ? "<p class='subtitle'>Select or create a session and send a prompt.</p>" : "")}
+          </div>
+
+          ${!isViewer ? `
+            <form id="chat-prompt-form" class="chat-composer">
+              <textarea id="chat-prompt-input" rows="3" placeholder="Send prompt to active CLI..." required></textarea>
+              <div class="btn-group" style="margin-top:8px;">
+                <button class="btn-primary" type="submit" style="width:auto;">Send Prompt</button>
+              </div>
+            </form>` : ""}
+
+          ${terminalHtml}
+        </div>
+      </section>`;
+  }
+
+  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {
     closeActivePty();
-    const host = document.getElementById("oauth-xterm-host");
+    const host = document.getElementById(hostId);
     if (!host) return;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     let cols = 90;
     let rows = 24;
     let term = null;
-    const fallbackLog = document.getElementById("oauth-xterm-fallback");
-    const fallbackForm = document.getElementById("oauth-fallback-input-form");
+    const fallbackLog = document.getElementById(fallbackLogId);
+    const fallbackForm = document.getElementById(fallbackFormId);
 
     if (typeof window.Terminal === "function") {
       host.innerHTML = "";
@@ -600,11 +820,11 @@
       term.open(host);
       state.ptyTerminal = term;
     } else if (fallbackLog && fallbackForm) {
-      fallbackLog.textContent = "Connecting to OAuth login PTY...\n";
+      fallbackLog.textContent = "Connecting to PTY...\n";
       fallbackForm.style.display = "flex";
     }
 
-    const wsUrl = `${proto}//${window.location.host}/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}&cols=${cols}&rows=${rows}`;
+    const wsUrl = `${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`;
     const ws = new WebSocket(wsUrl);
     state.ptySocket = ws;
 
@@ -612,11 +832,8 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === "output") {
-          if (term) {
-            term.write(msg.data);
-          } else if (fallbackLog) {
-            fallbackLog.innerHTML += linkifyUrls(msg.data);
-          }
+          if (term) term.write(msg.data);
+          else if (fallbackLog) fallbackLog.innerHTML += linkifyUrls(msg.data);
         } else if (msg.type === "exit") {
           const note = `\r\n[Process exited with code ${msg.code}]\r\n`;
           if (term) term.write(note);
@@ -643,7 +860,7 @@
     } else if (fallbackForm) {
       fallbackForm.onsubmit = (e) => {
         e.preventDefault();
-        const inp = document.getElementById("oauth-fallback-input");
+        const inp = document.getElementById(fallbackInputId);
         if (inp && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
           inp.value = "";
@@ -652,15 +869,168 @@
     }
   }
 
+  function connectOAuthTerminal(accountId) {
+    const wsPath = `/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}`;
+    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath);
+  }
+
+  function connectProjectTerminal(mode) {
+    if (!state.activeProjectId) return;
+    const sidParam = mode === "cli" && state.activeSessionId ? `&session_id=${encodeURIComponent(state.activeSessionId)}` : "";
+    const wsPath = `/api/projects/${encodeURIComponent(state.activeProjectId)}/terminal/ws?token=${encodeURIComponent(state.accessToken)}&mode=${encodeURIComponent(mode)}${sidParam}`;
+    attachPtyTerminal("project-xterm-host", "project-xterm-fallback", "project-xterm-fallback-form", "project-xterm-fallback-input", wsPath);
+  }
+
   function bindDashboardHandlers() {
     document.querySelectorAll("[data-pid]").forEach((btn) => {
       btn.onclick = async () => {
         state.activeProjectId = btn.dataset.pid;
+        state.activeSessionId = null;
         state.tab = "overview";
         await loadProjectCli();
+        connectChatStream(state.activeProjectId);
         render();
       };
     });
+
+    const newSessBtn = document.getElementById("new-chat-session-btn");
+    if (newSessBtn) {
+      newSessBtn.onclick = async () => {
+        try {
+          const created = await api(`/api/projects/${state.activeProjectId}/sessions`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          state.activeSessionId = created.id;
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const searchInp = document.getElementById("session-search-input");
+    if (searchInp) {
+      searchInp.onchange = async () => {
+        state.sessionSearch = searchInp.value;
+        await loadProjectSessions();
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-sid]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.activeSessionId = btn.dataset.sid;
+        await loadProjectSessions();
+        render();
+      };
+    });
+
+    const toggleApprovalBtn = document.getElementById("toggle-approval-mode-btn");
+    if (toggleApprovalBtn && state.activeSessionDetail) {
+      toggleApprovalBtn.onclick = async () => {
+        const cur = state.activeSessionDetail.session.approval_mode;
+        const next = cur === "interactive" ? "full_auto" : "interactive";
+        try {
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ approval_mode: next }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const toggleTermBtn = document.getElementById("toggle-project-terminal-btn");
+    if (toggleTermBtn) {
+      toggleTermBtn.onclick = () => {
+        state.showProjectTerminal = !state.showProjectTerminal;
+        render();
+        if (state.showProjectTerminal) {
+          connectProjectTerminal(state.terminalMode);
+        }
+      };
+    }
+
+    const closeTermBtn = document.getElementById("close-project-term");
+    if (closeTermBtn) {
+      closeTermBtn.onclick = () => { state.showProjectTerminal = false; render(); };
+    }
+
+    const shellModeBtn = document.getElementById("term-mode-shell");
+    if (shellModeBtn) {
+      shellModeBtn.onclick = () => { state.terminalMode = "shell"; connectProjectTerminal("shell"); };
+    }
+
+    const cliModeBtn = document.getElementById("term-mode-cli");
+    if (cliModeBtn) {
+      cliModeBtn.onclick = () => { state.terminalMode = "cli"; connectProjectTerminal("cli"); };
+    }
+
+    const stopBtn = document.getElementById("stop-active-turn-btn");
+    if (stopBtn && state.activeSessionId) {
+      stopBtn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}/stop`, {
+            method: "POST",
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-allow-turn]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/turns/${btn.dataset.allowTurn}/permission`, {
+            method: "POST",
+            body: JSON.stringify({ approved: true, request_id: btn.dataset.reqId }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-deny-turn]").forEach((btn) => {
+      btn.onclick = async () => {
+        try {
+          await api(`/api/projects/${state.activeProjectId}/turns/${btn.dataset.denyTurn}/permission`, {
+            method: "POST",
+            body: JSON.stringify({ approved: false, request_id: btn.dataset.reqId }),
+          });
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const promptForm = document.getElementById("chat-prompt-form");
+    if (promptForm) {
+      promptForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("chat-prompt-input");
+        const prompt = input ? input.value.trim() : "";
+        if (!prompt) return;
+        try {
+          if (!state.activeSessionId) {
+            const created = await api(`/api/projects/${state.activeProjectId}/sessions`, {
+              method: "POST",
+              body: JSON.stringify({}),
+            });
+            state.activeSessionId = created.id;
+          }
+          await api(`/api/projects/${state.activeProjectId}/sessions/${state.activeSessionId}/turns`, {
+            method: "POST",
+            body: JSON.stringify({ prompt }),
+          });
+          if (input) input.value = "";
+          await loadProjectSessions();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
 
     const navAdmin = document.getElementById("nav-admin");
     if (navAdmin) navAdmin.onclick = () => { state.tab = "admin"; render(); };

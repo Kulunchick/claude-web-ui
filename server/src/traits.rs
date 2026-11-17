@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 pub use claude_web_ui_shared::accounts::CliProvider;
+pub use claude_web_ui_shared::chat::TurnEvent;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,46 +13,6 @@ pub struct CliInvocation {
     pub args: Vec<String>,
     pub working_dir: PathBuf,
     pub env: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TurnEvent {
-    TextDelta {
-        text: String,
-    },
-    ThinkingDelta {
-        text: String,
-    },
-    ToolCallStart {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    ToolCallResult {
-        id: String,
-        output: String,
-        is_error: bool,
-    },
-    SubagentStart {
-        id: String,
-        name: String,
-    },
-    SubagentEnd {
-        id: String,
-    },
-    PermissionRequest {
-        request_id: String,
-        tool_name: String,
-        input: serde_json::Value,
-    },
-    TurnComplete {
-        session_id: Option<String>,
-        result_text: String,
-    },
-    TurnError {
-        message: String,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

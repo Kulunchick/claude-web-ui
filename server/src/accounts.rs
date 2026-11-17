@@ -526,7 +526,7 @@ async fn login_pty_ws(
 }
 
 async fn handle_pty_socket(
-    mut socket: WebSocket,
+    socket: WebSocket,
     state: AppState,
     account: CliAccountDto,
     cols: u16,
@@ -545,6 +545,15 @@ async fn handle_pty_socket(
         rows,
     };
 
+    bridge_pty_websocket(socket, state, invocation).await;
+}
+
+/// Bridges an authenticated WebSocket upgrade to `state.cli_runner.spawn_pty`.
+pub(crate) async fn bridge_pty_websocket(
+    mut socket: WebSocket,
+    state: AppState,
+    invocation: PtyInvocation,
+) {
     let mut spawned = match state.cli_runner.spawn_pty(invocation).await {
         Ok(s) => s,
         Err(err) => {
@@ -749,11 +758,11 @@ pub fn spawn_portable_pty(invocation: PtyInvocation) -> Result<SpawnedPty, Strin
 impl CliRunner for PortablePtyCliRunner {
     async fn run_turn(
         &self,
-        _invocation: CliInvocation,
-        _event_tx: mpsc::UnboundedSender<TurnEvent>,
-        _approval_rx: mpsc::UnboundedReceiver<bool>,
+        invocation: CliInvocation,
+        event_tx: mpsc::UnboundedSender<TurnEvent>,
+        approval_rx: mpsc::UnboundedReceiver<bool>,
     ) -> Result<(), String> {
-        Err("structured CLI turns are implemented in Ticket #5".to_string())
+        crate::chat::run_native_cli_turn(invocation, event_tx, approval_rx).await
     }
 
     async fn spawn_pty(&self, invocation: PtyInvocation) -> Result<SpawnedPty, String> {

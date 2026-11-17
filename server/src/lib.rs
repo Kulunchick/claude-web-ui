@@ -67,6 +67,7 @@ pub struct AppState {
     pub config: Arc<GatewayConfig>,
     pub cli_runner: Arc<dyn CliRunner>,
     pub messenger: Arc<dyn MessengerTransport>,
+    pub scheduler: Arc<chat::ExecutionScheduler>,
 }
 
 #[derive(Clone)]
@@ -82,11 +83,18 @@ impl GatewayServer {
     ) -> Result<Self, ServerError> {
         std::fs::create_dir_all(&config.data_dir)?;
         let db = db::connect_sqlite_wal(&config.db_path).await?;
+        let config_arc = Arc::new(config);
+        let scheduler = Arc::new(chat::ExecutionScheduler::new(
+            db.clone(),
+            config_arc.clone(),
+            cli_runner.clone(),
+        ));
         let state = AppState {
             db,
-            config: Arc::new(config),
+            config: config_arc,
             cli_runner,
             messenger,
+            scheduler,
         };
         Ok(Self { state })
     }
@@ -96,6 +104,7 @@ impl GatewayServer {
             .route("/api/health", get(|| async { "ok" }))
             .merge(auth::router(self.state.clone()))
             .merge(accounts::router(self.state.clone()))
+            .merge(chat::router(self.state.clone()))
             .fallback(serve_embedded_ui)
             .layer(CorsLayer::permissive())
             .with_state(self.state.clone())
@@ -115,6 +124,10 @@ impl GatewayServer {
 
     pub fn messenger(&self) -> &Arc<dyn MessengerTransport> {
         &self.state.messenger
+    }
+
+    pub fn scheduler(&self) -> &Arc<chat::ExecutionScheduler> {
+        &self.state.scheduler
     }
 }
 

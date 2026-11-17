@@ -371,3 +371,88 @@ textarea {
 .checkbox-item input {
   width: auto;
 }
+
+.chat-workspace {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.session-item.active {
+  border-color: var(--accent);
+  background: rgba(124, 92, 255, 0.14);
+}
+
+.chat-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 14px 0;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.turn-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.event-text, .event-complete {
+  white-space: pre-wrap;
+  line-height: 1.45;
+  margin: 4px 0;
+}
+
+.event-thinking summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.event-tool-card, .event-tool-result {
+  background: #0d1017;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 0.82rem;
+}
+
+.event-tool-result.error {
+  border-color: var(--danger);
+}
+
+.approval-card {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: rgba(124, 92, 255, 0.12);
+}
+
+.chat-composer {
+  margin-top: 10px;
+}

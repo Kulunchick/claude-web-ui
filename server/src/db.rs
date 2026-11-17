@@ -133,6 +133,45 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             account_id TEXT NOT NULL REFERENCES cli_accounts(id) ON DELETE CASCADE,
             PRIMARY KEY (user_id, project_id, account_id)
         );
+
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            native_session_id TEXT,
+            title TEXT NOT NULL,
+            approval_mode TEXT NOT NULL DEFAULT 'full_auto',
+            source TEXT NOT NULL DEFAULT 'gateway',
+            transcript_path TEXT,
+            created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_native
+            ON chat_sessions(project_id, provider, native_session_id)
+            WHERE native_session_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS chat_turns (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            account_id TEXT,
+            prompt TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_text TEXT,
+            error_message TEXT,
+            pending_permission_json TEXT,
+            events_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_id, created_at);
         "#,
     )
     .execute(pool)
