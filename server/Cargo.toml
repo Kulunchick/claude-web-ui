@@ -1,0 +1,30 @@
+[package]
+name = "claude-web-ui-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+claude-web-ui-shared = { path = "../shared" }
+axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+argon2 = "0.5"
+jsonwebtoken = { version = "12", default-features = false, features = ["rust_crypto"] }
+rust-embed = "8"
+mime_guess = "2"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+http-body-util = "0.1"
