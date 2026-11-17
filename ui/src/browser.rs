@@ -1,7 +1,9 @@
-use crate::auth_view::{BootstrapAdminView, InviteRedemptionView, LoginView, ProjectList};
+use crate::auth_view::{
+    AdminUsersProjectsView, BootstrapAdminView, InviteRedemptionView, LoginView, ProjectList,
+};
 use claude_web_ui_shared::auth::{
-    ApiErrorResponse, AuthTokensResponse, BootstrapAdminRequest, LoginRequest, ProjectDto,
-    RedeemInviteRequest,
+    ApiErrorResponse, AuthTokensResponse, BootstrapAdminRequest, InviteDto, LoginRequest,
+    ProjectDto, RedeemInviteRequest, UserDto,
 };
 use gloo_net::http::{Request, RequestBuilder};
 use leptos::mount::mount_to;
@@ -136,4 +138,47 @@ pub fn mount_cron(parent: HtmlElement, project_id: String, access_token: String)
         }
     });
     MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+}
+
+#[wasm_bindgen]
+pub fn mount_kanban(
+    parent: HtmlElement,
+    project_id: String,
+    access_token: String,
+    read_only: bool,
+) {
+    let handle = mount_to(parent, move || {
+        view! {
+            <crate::kanban_view::KanbanView
+                project_id=project_id
+                access_token=access_token
+                read_only=read_only
+                open_session=Callback::new(|id: String| emit("cwu:open-kanban-session", &id))
+            />
+        }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+}
+
+#[wasm_bindgen]
+pub fn mount_admin(
+    parent: HtmlElement,
+    users: &str,
+    projects: &str,
+    invites: &str,
+) -> Result<(), JsValue> {
+    fn decode<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, JsValue> {
+        serde_json::from_str(input).map_err(|err| JsValue::from(err.to_string()))
+    }
+
+    let users: Vec<UserDto> = decode(users)?;
+    let projects: Vec<ProjectDto> = decode(projects)?;
+    let invites: Vec<InviteDto> = decode(invites)?;
+    let handle = mount_to(parent, move || {
+        let (users, _) = signal(users);
+        let (projects, _) = signal(projects);
+        view! { <AdminUsersProjectsView users=users projects=projects invites=invites /> }
+    });
+    MOUNTS.with(|mounts| mounts.borrow_mut().push(Box::new(handle)));
+    Ok(())
 }

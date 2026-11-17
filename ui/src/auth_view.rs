@@ -1,4 +1,4 @@
-use claude_web_ui_shared::auth::{ProjectDto, Role, UserDto};
+use claude_web_ui_shared::auth::{InviteDto, ProjectDto, Role, UserDto};
 use leptos::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,47 +286,72 @@ pub fn ProjectSwitcherSidebar(
 pub fn AdminUsersProjectsView(
     users: ReadSignal<Vec<UserDto>>,
     projects: ReadSignal<Vec<ProjectDto>>,
+    #[prop(default = Vec::new())] invites: Vec<InviteDto>,
 ) -> impl IntoView {
     view! {
         <section class="admin-panel" data-view="admin-users-projects">
-            <h2>"Users, Invites & Project Workspaces"</h2>
             <div class="admin-grid">
-                <div class="panel-card">
-                    <h3>"Registered Projects"</h3>
-                    <ul>
-                        <For
-                            each=move || projects.get()
-                            key=|p| p.id.clone()
-                            children=move |p| {
-                                view! {
-                                    <li>
-                                        <strong>{p.name}</strong>
-                                        " — "
-                                        <code>{p.workspace_path}</code>
-                                    </li>
-                                }
-                            }
-                        />
-                    </ul>
-                </div>
-                <div class="panel-card">
-                    <h3>"Users"</h3>
-                    <ul>
-                        <For
-                            each=move || users.get()
-                            key=|u| u.id.clone()
-                            children=move |u| {
-                                view! {
-                                    <li>
-                                        <strong>{u.username}</strong>
-                                        " (" {u.email} ") — "
-                                        <span class="role-badge">{u.role.as_str()}</span>
-                                    </li>
-                                }
-                            }
-                        />
-                    </ul>
-                </div>
+                <form class="panel-card" id="create-project-form">
+                    <h3>"Register Project Workspace"</h3>
+                    <div class="form-group">
+                        <label for="admin-project-name">"Project Name"</label>
+                        <input id="admin-project-name" name="name" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="admin-workspace-path">"Workspace Path"</label>
+                        <input id="admin-workspace-path" name="workspace_path" required />
+                    </div>
+                    <button class="btn-primary" type="submit">"Register Project"</button>
+                </form>
+                <form class="panel-card" id="create-invite-form">
+                    <h3>"Generate Single-Use Invite"</h3>
+                    <div class="form-group">
+                        <label for="admin-invite-role">"Role"</label>
+                        <select id="admin-invite-role" name="role">
+                            <option value="developer">"Developer"</option>
+                            <option value="viewer">"Viewer"</option>
+                            <option value="admin">"Admin"</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="admin-invite-projects">"Allowed Projects"</label>
+                        <select id="admin-invite-projects" name="project_ids" multiple>
+                            <For
+                                each=move || projects.get()
+                                key=|project| project.id.clone()
+                                children=|project| view!{ <option value=project.id>{project.name}</option> }
+                            />
+                        </select>
+                    </div>
+                    <button class="btn-primary" type="submit">"Create Invite"</button>
+                </form>
+            </div>
+            <div class="panel-card">
+                <h3>"Users"</h3>
+                <Show when=move || users.with(Vec::is_empty)><p class="subtitle">"No users."</p></Show>
+                <For
+                    each=move || users.get()
+                    key=|user| user.id.clone()
+                    children=|user| view! {
+                        <div class="row">
+                            <div>
+                                <strong>{user.username}</strong> " (" {user.email} ") "
+                                <span class="role-badge">{user.role.as_str()}</span>
+                            </div>
+                            <button type="button" class="btn-danger" data-revoke-uid=user.id>"Revoke Sessions"</button>
+                        </div>
+                    }
+                />
+            </div>
+            <div class="panel-card">
+                <h3>"Invites"</h3>
+                {invites.is_empty().then(|| view! { <p class="subtitle">"No invites yet."</p> })}
+                {invites.into_iter().map(|invite| view!{
+                    <div class="row">
+                        <div><code>{invite.code}</code> " " {invite.role.as_str()}</div>
+                        <span>{if invite.used_by.is_some() { "Used" } else { "Available" }}</span>
+                    </div>
+                }).collect_view()}
             </div>
         </section>
     }

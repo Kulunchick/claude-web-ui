@@ -26,31 +26,66 @@ pub fn KanbanView(
     let description = RwSignal::new(String::new());
     let branch = RwSignal::new(String::new());
     let dedicated = RwSignal::new(false);
-    let blockers = RwSignal::new(String::new());
+    let blockers = RwSignal::new(Vec::<String>::new());
+    let new_column = RwSignal::new(Column::Triage);
     let dragged = RwSignal::new(None::<String>);
     let error = RwSignal::new(String::new());
     let diff = RwSignal::new(None::<String>);
     let endpoint = StoredValue::new(format!("/api/projects/{project_id}/kanban"));
     let token = StoredValue::new(access_token);
+    #[cfg(target_arch = "wasm32")]
+    let request_generation = RwSignal::new(0u64);
+    #[cfg(target_arch = "wasm32")]
+    let mutation_pending = RwSignal::new(false);
     let submit = Callback::new(move |action: Action| {
         #[cfg(target_arch = "wasm32")]
         if let Some(token) = token.get_value() {
             let endpoint = endpoint.get_value();
+            let refreshing = matches!(action, Action::Refresh);
+            if mutation_pending.get_untracked() {
+                return;
+            }
+            let mutating = !matches!(action, Action::Refresh | Action::Diff(_));
+            if mutating {
+                mutation_pending.set(true);
+            }
+            let generation = request_generation.get_untracked() + 1;
+            request_generation.set(generation);
             leptos::task::spawn_local(async move {
-                error.set(String::new());
+                if !refreshing {
+                    let _ = error.try_set(String::new());
+                }
                 if let Action::Diff(id) = action {
                     match request_diff(&endpoint, &token, &id).await {
-                        Ok(result) => diff.set(Some(result)),
-                        Err(message) => error.set(message),
+                        Ok(result) => {
+                            let _ = diff.try_set(Some(result));
+                        }
+                        Err(message) => {
+                            let _ = error.try_set(message);
+                        }
                     }
                     return;
                 }
-                match request(&endpoint, &token, action).await {
+                let result = request(&endpoint, &token, action).await;
+                if mutating {
+                    let _ = mutation_pending.try_set(false);
+                }
+                if request_generation.try_get_untracked() != Some(generation) {
+                    return;
+                }
+                match result {
                     Ok(result) => {
-                        cards.set(result);
-                        editor.set(None);
+                        let _ = error.try_set(String::new());
+                        if cards.try_with_untracked(|current| current != &result) == Some(true) {
+                            let _ = cards.try_set(result);
+                        }
+                        if !refreshing {
+                            let _ = editor.try_set(None);
+                        }
                     }
-                    Err(message) => error.set(message),
+                    Err(message) => {
+                        let _ = error.try_set(message);
+                    }
                 }
             });
         }
@@ -62,6 +97,17 @@ pub fn KanbanView(
     });
     if token.with_value(Option::is_some) {
         Effect::new(move |_| submit.run(Action::Refresh));
+        #[cfg(target_arch = "wasm32")]
+        if let Ok(interval) = leptos::prelude::set_interval_with_handle(
+            move || {
+                if editor.get_untracked().is_none() && dragged.get_untracked().is_none() {
+                    submit.run(Action::Refresh);
+                }
+            },
+            std::time::Duration::from_millis(1500),
+        ) {
+            on_cleanup(move || interval.clear());
+        }
     }
     let edit = Callback::new(move |card: Option<KanbanCardDto>| {
         title.set(
@@ -82,20 +128,18 @@ pub fn KanbanView(
         );
         blockers.set(
             card.as_ref()
-                .map(|card| card.depends_on.join(", "))
+                .map(|card| card.depends_on.clone())
                 .unwrap_or_default(),
         );
+        new_column.set(Column::Triage);
         editor.set(Some(card.map(|card| card.id)));
     });
     let save = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        let depends_on: Vec<_> = blockers
-            .get()
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect();
+        #[cfg(target_arch = "wasm32")]
+        let depends_on = selected_dependencies(&event);
+        #[cfg(not(target_arch = "wasm32"))]
+        let depends_on = blockers.get_untracked();
         let branch = branch.get();
         let mut values = json!({
             "title": title.get(),
@@ -114,7 +158,10 @@ pub fn KanbanView(
             }
             submit.run(match entry {
                 Some(id) => Action::Edit(id, values),
-                None => Action::Create(values),
+                None => {
+                    values["column"] = json!(new_column.get_untracked());
+                    Action::Create(values)
+                }
             });
         }
     };
@@ -132,8 +179,38 @@ pub fn KanbanView(
                 <form class="kanban-form" on:submit=save>
                     <label>"Title"<input required prop:value=move || title.get() on:input=move |ev| title.set(event_target_value(&ev))/></label>
                     <label>"Description"<textarea prop:value=move || description.get() on:input=move |ev| description.set(event_target_value(&ev)) /></label>
-                    <label>"Dependency card IDs"<input prop:value=move || blockers.get()
-                        on:input=move |ev| blockers.set(event_target_value(&ev))/></label>
+                    <Show when=move || editor.get() == Some(None)>
+                        <label>"Column"
+                            <select
+                                prop:value=move || new_column.get().as_str()
+                                on:change=move |event| {
+                                    let value = event_target_value(&event);
+                                    if let Some(column) = Column::ALL.into_iter().find(|column| column.as_str() == value) {
+                                        new_column.set(column);
+                                    }
+                                }
+                            >
+                                {Column::ALL.into_iter().map(|column| view! {
+                                    <option value=column.as_str()>{column_label(column)}</option>
+                                }).collect_view()}
+                            </select>
+                        </label>
+                    </Show>
+                    <label>"Depends on"
+                        <select name="depends_on" multiple
+                            disabled=move || editor.get().flatten().is_some_and(|id| {
+                                cards.with(|cards| cards.iter().any(|card| card.id == id && card.column == Column::Running))
+                            })
+                        >
+                            {move || {
+                                let editing = editor.get().flatten();
+                                cards.get().into_iter().filter(|card| Some(&card.id) != editing.as_ref()).map(|card| {
+                                    let selected = blockers.with(|ids| ids.contains(&card.id));
+                                    view! { <option value=card.id prop:selected=selected>{card.title}</option> }
+                                }).collect_view()
+                            }}
+                        </select>
+                    </label>
                     <label><input type="checkbox" prop:checked=move || dedicated.get()
                         on:change=move |ev| dedicated.set(event_target_checked(&ev))/>"Create dedicated git branch"</label>
                     <label>"Branch name"<input prop:value=move || branch.get() on:input=move |ev| branch.set(event_target_value(&ev))/></label>
@@ -153,7 +230,7 @@ pub fn KanbanView(
             <div class="kanban-board">
                 {Column::ALL.into_iter().map(|column| {
                     view! {
-                        <section class="kanban-lane"
+                        <section class="kanban-lane" data-kanban-lane=column.as_str()
                             on:dragover=move |ev| { if dragged.get_untracked().is_some() { ev.prevent_default(); } }
                             on:drop=move |ev| {
                                 ev.prevent_default();
@@ -230,6 +307,23 @@ pub fn KanbanView(
             </div>
         </section>
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn selected_dependencies(event: &leptos::ev::SubmitEvent) -> Vec<String> {
+    use leptos::web_sys::{FormData, HtmlFormElement};
+    use wasm_bindgen::JsCast;
+    event
+        .current_target()
+        .and_then(|target| target.dyn_into::<HtmlFormElement>().ok())
+        .and_then(|form| FormData::new_with_form(&form).ok())
+        .map(|form| {
+            form.get_all("depends_on")
+                .iter()
+                .filter_map(|value| value.as_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn column_label(column: Column) -> &'static str {

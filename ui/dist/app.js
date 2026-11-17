@@ -534,14 +534,17 @@
     });
   });
 
-  window.addEventListener("cwu:open-cron-session", async ({ detail: sessionId }) => {
-    if (!state.user || state.projectTab !== "cron") return;
+  async function openProjectSession(sessionId, source) {
+    if (!state.user || state.projectTab !== source) return;
     state.activeSessionId = sessionId;
     state.sessionSearch = "";
     state.projectTab = "chat";
     await loadProjectSessions();
     render();
-  });
+  }
+
+  window.addEventListener("cwu:open-cron-session", ({ detail }) => openProjectSession(detail, "cron"));
+  window.addEventListener("cwu:open-kanban-session", ({ detail }) => openProjectSession(detail, "kanban"));
 
   let changingProject = false;
   window.addEventListener("cwu:select-project", async ({ detail: projectId }) => {
@@ -588,6 +591,54 @@
     app.replaceChildren();
     leptos.mount_auth(app, state.screen, state.error, invite);
   }
+
+  app.addEventListener("submit", async (event) => {
+    const form = event.target;
+    const project = form.id === "create-project-form";
+    if (state.user?.role !== "admin" || (!project && form.id !== "create-invite-form")) return;
+    event.preventDefault();
+    const fields = new FormData(form);
+    const button = form.querySelector("button[type='submit']");
+    if (button.disabled) return;
+    button.disabled = true;
+    state.error = null;
+    state.notice = null;
+    try {
+      if (project) {
+        const body = { name: fields.get("name"), workspace_path: fields.get("workspace_path") };
+        await api("/api/admin/projects", { method: "POST", body: JSON.stringify(body) });
+        state.notice = "Project registered.";
+      } else {
+        const body = { role: fields.get("role"), project_ids: fields.getAll("project_ids") };
+        const invite = await api("/api/admin/invites", { method: "POST", body: JSON.stringify(body) });
+        state.notice = `Created invite code: ${invite.code}`;
+      }
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  app.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-revoke-uid]");
+    if (!button || button.disabled || state.user?.role !== "admin") return;
+    button.disabled = true;
+    state.error = null;
+    state.notice = null;
+    try {
+      await api(`/api/admin/users/${encodeURIComponent(button.dataset.revokeUid)}/revoke-sessions`, { method: "POST" });
+      state.notice = "User sessions revoked.";
+      await loadAuthenticatedData();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   function renderHeaderSwitcher(activeProject) {
     if (!activeProject || !state.projectCli) {
@@ -793,186 +844,6 @@
   }
 
 
-  const kanbanColumns = ["triage", "ready", "running", "blocked", "review", "done", "archived"];
-  const kanban = { projectId: null, cards: [], editing: null, error: null };
-
-  function kanbanPath(projectId = state.activeProjectId) {
-    return `/api/projects/${encodeURIComponent(projectId)}/kanban`;
-  }
-
-  async function loadKanban() {
-    const projectId = state.activeProjectId;
-    if (!projectId) return;
-    const cards = await api(kanbanPath(projectId));
-    if (projectId !== state.activeProjectId || state.projectTab !== "kanban") return;
-    const changed = projectId !== kanban.projectId || JSON.stringify(cards) !== JSON.stringify(kanban.cards);
-    kanban.projectId = projectId;
-    kanban.cards = cards;
-    if (changed && !kanban.editing) render();
-  }
-
-  function renderKanban(readOnly) {
-    const cards = kanban.projectId === state.activeProjectId ? kanban.cards : [];
-    const card = cards.find((item) => item.id === kanban.editing);
-    const label = (value) => value[0].toUpperCase() + value.slice(1);
-    const options = (selected) => kanbanColumns.map((column) => `
-      <option value="${column}" ${column === selected ? "selected" : ""}>${label(column)}</option>
-    `).join("");
-    return `
-      <section class="panel-card kanban-panel">
-        <div class="pane-head">
-          <h2>Kanban</h2>
-          ${readOnly ? "" : '<button class="btn-primary" type="button" id="kanban-new">New card</button>'}
-        </div>
-        ${kanban.error ? `<p role="alert">${esc(kanban.error)}</p>` : ""}
-        ${!readOnly && kanban.editing ? `
-          <form id="kanban-form" class="kanban-form">
-            <label>Title <input name="title" value="${esc(card?.title)}" required></label>
-            <label>Description <textarea name="description">${esc(card?.description)}</textarea></label>
-            ${card ? "" : `<label>Column <select name="column">${options("triage")}</select></label>`}
-            <label>Depends on <select name="depends_on" multiple ${card?.column === "running" ? "disabled" : ""}>
-              ${cards.filter((item) => item.id !== card?.id).map((item) => `
-                <option value="${esc(item.id)}" ${card?.depends_on.includes(item.id) ? "selected" : ""}>${esc(item.title)}</option>`).join("")}
-            </select></label>
-            <label><input name="create_git_branch" type="checkbox" ${card?.create_git_branch ? "checked" : ""}> Create dedicated git branch</label>
-            <label>Branch name <input name="git_branch_name" value="${esc(card?.git_branch_name)}" placeholder="Generated if blank"></label>
-            <div><button type="submit" class="btn-primary">Save card</button>
-              <button type="button" class="btn-secondary" id="kanban-cancel">Cancel</button></div>
-          </form>` : ""}
-        <div class="kanban-board">
-          ${kanbanColumns.map((column) => `
-            <section class="kanban-lane" data-kanban-lane="${column}">
-              <h3>${label(column)}</h3>
-              ${cards.filter((card) => card.column === column).map((card, index) => `
-                <article class="kanban-card" data-kanban-card="${esc(card.id)}" data-kanban-index="${index}" draggable="${!readOnly}">
-                  ${card.session_id ? `<button class="kanban-title" type="button" data-kanban-session="${esc(card.session_id)}">${esc(card.title)}</button>` : `<strong>${esc(card.title)}</strong>`}
-                  ${card.description ? `<p>${esc(card.description)}</p>` : ""}
-                  ${card.unresolved_blockers.length ? `<p>Waiting on ${card.unresolved_blockers.map((id) => esc(cards.find((item) => item.id === id)?.title || id)).join(", ")}</p>` : ""}
-                  ${card.git_branch_name ? `<p>Branch <code>${esc(card.git_branch_name)}</code></p>` : ""}
-                  ${card.session_status ? `<p>CLI session ${esc(card.session_status.replaceAll("_", " "))}</p>` : ""}
-                  ${card.blocked_reason ? `<p>${esc(card.blocked_reason)}</p>` : ""}
-                  ${card.result_summary ? `<p>${esc(card.result_summary)}</p>` : ""}
-                  <div class="kanban-actions">
-                    ${card.session_id ? '<button type="button" class="btn-secondary" data-kanban-diff>Git diff</button>' : ""}
-                    ${readOnly ? "" : `
-                      <button type="button" class="btn-secondary" data-kanban-edit="${esc(card.id)}">Edit</button>
-                      ${column === "triage" ? `<button type="button" class="btn-secondary" data-kanban-decompose="${esc(card.id)}">Decompose with Agent</button>` : ""}
-                      <select aria-label="Move card" data-kanban-move="${esc(card.id)}">${options(column)}</select>`}
-                  </div>
-                </article>`).join("")}
-            </section>`).join("")}
-        </div>
-      </section>`;
-  }
-
-  function bindKanbanHandlers() {
-    const tab = document.getElementById("proj-tab-kanban");
-    if (tab) tab.onclick = async () => {
-      kanban.editing = null;
-      kanban.error = null;
-      state.projectTab = "kanban";
-      render();
-      try { await loadKanban(); } catch (error) { kanban.error = error.message; render(); }
-    };
-    const board = document.querySelector(".kanban-board");
-    if (!board) return;
-    const path = kanbanPath();
-    let dragging = null;
-    const mutate = async (suffix, method, value) => {
-      try {
-        kanban.error = null;
-        await api(path + suffix, { method, body: JSON.stringify(value) });
-        kanban.editing = null;
-        await loadKanban();
-      } catch (error) {
-        kanban.error = error.message;
-      }
-      render();
-    };
-    const move = (id, column, position) => mutate(`/${encodeURIComponent(id)}/move`, "POST", { column, position });
-    document.getElementById("kanban-new")?.addEventListener("click", () => { kanban.editing = "new"; render(); });
-    document.getElementById("kanban-cancel")?.addEventListener("click", () => { kanban.editing = null; render(); });
-    document.getElementById("kanban-form")?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const form = new FormData(event.currentTarget);
-      const value = {
-        title: form.get("title"),
-        description: form.get("description"),
-        create_git_branch: form.has("create_git_branch"),
-        git_branch_name: form.get("git_branch_name").trim() || null,
-      };
-      if (!event.currentTarget.elements.depends_on.disabled) value.depends_on = form.getAll("depends_on");
-      if (kanban.editing === "new") {
-        value.column = form.get("column");
-        void mutate("", "POST", value);
-      } else {
-        void mutate(`/${encodeURIComponent(kanban.editing)}`, "PATCH", value);
-      }
-    });
-    board.querySelectorAll("[data-kanban-edit]").forEach((button) => {
-      button.onclick = () => { kanban.editing = button.dataset.kanbanEdit; render(); };
-    });
-    board.querySelectorAll("[data-kanban-decompose]").forEach((button) => {
-      button.onclick = () => mutate(`/${encodeURIComponent(button.dataset.kanbanDecompose)}/decompose`, "POST", {});
-    });
-    board.querySelectorAll("[data-kanban-session]").forEach((button) => {
-      button.onclick = async () => {
-        state.activeSessionId = button.dataset.kanbanSession;
-        state.projectTab = "chat";
-        await loadProjectSessions();
-        render();
-      };
-    });
-    board.querySelectorAll("[data-kanban-diff]").forEach((button) => {
-      button.onclick = async () => {
-        try {
-          const id = button.closest("[data-kanban-card]").dataset.kanbanCard;
-          const result = await api(path + "/" + encodeURIComponent(id) + "/diff");
-          const dialog = document.createElement("dialog");
-          const heading = document.createElement("h3");
-          heading.textContent = "Card git diff";
-          const diff = document.createElement("pre");
-          diff.textContent = result.unified === null ? "No diff recorded." : result.unified || "No tracked file changes.";
-          const close = document.createElement("button");
-          close.type = "button";
-          close.textContent = "Close";
-          close.onclick = () => dialog.close();
-          dialog.addEventListener("close", () => dialog.remove(), { once: true });
-          dialog.append(heading, diff, close);
-          document.body.appendChild(dialog);
-          dialog.showModal();
-        } catch (error) {
-          kanban.error = error.message;
-          render();
-        }
-      };
-    });
-    board.querySelectorAll("[data-kanban-move]").forEach((select) => {
-      select.onchange = () => move(select.dataset.kanbanMove, select.value);
-    });
-    board.querySelectorAll(".kanban-card[draggable=true]").forEach((card) => {
-      card.ondragstart = (event) => {
-        dragging = card;
-        event.dataTransfer.setData("text/plain", card.dataset.kanbanCard);
-        event.dataTransfer.effectAllowed = "move";
-      };
-      card.ondragend = () => { dragging = null; };
-    });
-    board.querySelectorAll("[data-kanban-lane]").forEach((lane) => {
-      lane.ondragover = (event) => { if (dragging) event.preventDefault(); };
-      lane.ondrop = (event) => {
-        if (!dragging) return;
-        event.preventDefault();
-        const target = event.target.closest("[data-kanban-card]");
-        if (target === dragging) return;
-        let position = target ? Number(target.dataset.kanbanIndex) : undefined;
-        if (target && dragging.parentNode === lane && Number(dragging.dataset.kanbanIndex) < position) position -= 1;
-        void move(dragging.dataset.kanbanCard, lane.dataset.kanbanLane, position);
-        dragging = null;
-      };
-    });
-  }
-
   function renderDashboard() {
     closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
@@ -982,51 +853,7 @@
 
     let mainHtml = "";
     if (state.tab === "admin" && isAdmin) {
-      const projectOptions = state.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
-      const usersHtml = state.adminUsers.map((u) => `
-        <div class="row">
-          <div>
-            <strong>${esc(u.username)}</strong> (${esc(u.email)})
-            <span class="role-badge">${esc(u.role)}</span>
-          </div>
-          <button class="btn-danger" data-revoke-uid="${esc(u.id)}">Revoke Sessions</button>
-        </div>
-      `).join("");
-      const invitesHtml = state.adminInvites.map((inv) => `
-        <div class="row">
-          <div><code>${esc(inv.code)}</code> Ã¢â‚¬â€ ${esc(inv.role)}</div>
-          <span>${inv.used_by ? "Used" : "Available"}</span>
-        </div>
-      `).join("");
-
-      mainHtml = `
-        <div class="admin-grid">
-          <form class="panel-card" id="create-project-form">
-            <h3>Register Project Workspace</h3>
-            <div class="form-group"><label>Project Name</label><input name="name" required /></div>
-            <div class="form-group"><label>Workspace Path</label><input name="workspace_path" required /></div>
-            <button class="btn-primary" type="submit">Register Project</button>
-          </form>
-          <form class="panel-card" id="create-invite-form">
-            <h3>Generate Single-Use Invite</h3>
-            <div class="form-group">
-              <label>Role</label>
-              <select name="role">
-                <option value="developer">Developer</option>
-                <option value="viewer">Viewer</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Allowed Projects</label>
-              <select name="project_ids" multiple>${projectOptions}</select>
-            </div>
-            <button class="btn-primary" type="submit">Create Invite</button>
-          </form>
-        </div>
-        <div class="panel-card"><h3>Users</h3>${usersHtml || "<p class='subtitle'>No users.</p>"}</div>
-        <div class="panel-card"><h3>Invites</h3>${invitesHtml || "<p class='subtitle'>No invites yet.</p>"}</div>
-      `;
+      mainHtml = '<div id="admin-workspace"></div>';
     } else if (state.tab === "accounts" && isAdmin) {
       mainHtml = renderAccountsTab();
     } else if (state.tab === "agents_skills_mcp") {
@@ -1138,7 +965,7 @@
           <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
           <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
         </div>
-        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? renderKanban(readOnly) : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
+        ${state.projectTab === "files" ? filesGitHtml : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : renderProjectWorkspace(activeProject)}
       `;
     }
 
@@ -1179,6 +1006,10 @@
     leptos.mount_project_list(document.getElementById("project-list"), JSON.stringify(state.projects), state.activeProjectId);
     const cron = document.getElementById("cron-workspace");
     if (cron) leptos.mount_cron(cron, state.activeProjectId, state.accessToken || "");
+    const kanban = document.getElementById("kanban-workspace");
+    if (kanban) leptos.mount_kanban(kanban, state.activeProjectId, state.accessToken || "", state.user.role === "viewer");
+    const admin = document.getElementById("admin-workspace");
+    if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
     bindDashboardHandlers();
   }
 
@@ -1226,6 +1057,10 @@
     const isViewer = state.user.role === "viewer";
     const detail = state.activeSessionDetail;
     const activeSess = detail ? detail.session : state.sessions.find((s) => s.id === state.activeSessionId) || null;
+    const selectedProvider = state.projectCli?.active_provider;
+    const handoffProvider = !isViewer && activeSess?.message_count && activeSess.provider !== selectedProvider
+      ? selectedProvider
+      : null;
     const sessionListHtml = state.sessions.map((s) => `
       <li>
         <button class="session-item ${s.id === state.activeSessionId ? "active" : ""}" data-sid="${esc(s.id)}">
@@ -1313,6 +1148,7 @@
             </div>
             ${!isViewer ? `
               <div class="btn-group">
+                ${handoffProvider ? `<button class="btn-secondary" id="chat-handoff" data-provider="${esc(handoffProvider)}" type="button">Continue with ${esc(PROVIDER_LABELS[handoffProvider])}</button>` : ""}
                 ${activeSess ? `<button class="btn-secondary" id="toggle-approval-mode-btn" type="button">${approvalLabel}</button>` : ""}
                 <button class="btn-secondary" id="toggle-project-terminal-btn" type="button">${state.showProjectTerminal ? "Hide Terminal" : "Project Terminal"}</button>
                 ${activeSess && hasActiveTurn ? `<button class="btn-danger" id="stop-active-turn-btn" type="button">Stop</button>` : ""}
@@ -1656,7 +1492,8 @@
   }
 
   function bindDashboardHandlers() {
-    bindKanbanHandlers();
+    const kanbanTab = document.getElementById("proj-tab-kanban");
+    if (kanbanTab) kanbanTab.onclick = () => { state.projectTab = "kanban"; render(); };
     const projTabChat = document.getElementById("proj-tab-chat");
     if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
 
@@ -1705,6 +1542,29 @@
       toggleGi.onchange = async () => {
         state.respectGitignore = toggleGi.checked;
         await loadProjectWorkspace();
+        render();
+      };
+    }
+
+    const handoff = document.getElementById("chat-handoff");
+    if (handoff) {
+      handoff.onclick = async () => {
+        const projectId = state.activeProjectId;
+        const sourceId = state.activeSessionId;
+        handoff.disabled = true;
+        state.error = null;
+        try {
+          const continuation = await api(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sourceId)}/handoff`, {
+            method: "POST",
+            body: JSON.stringify({ provider: handoff.dataset.provider }),
+          });
+          if (state.activeProjectId !== projectId || state.activeSessionId !== sourceId) return;
+          state.activeSessionId = continuation.id;
+          state.sessionSearch = "";
+          await loadProjectSessions();
+        } catch (error) {
+          state.error = error.message;
+        }
         render();
       };
     }
@@ -2122,46 +1982,6 @@
       };
     });
 
-    const cpForm = document.getElementById("create-project-form");
-    if (cpForm) {
-      cpForm.onsubmit = async (e) => {
-        e.preventDefault();
-        state.error = null; state.notice = null;
-        const fd = new FormData(e.target);
-        try {
-          await api("/api/projects", { method: "POST", body: JSON.stringify(Object.fromEntries(fd.entries())) });
-          state.notice = "Project registered.";
-          await loadAuthenticatedData();
-        } catch (err) { state.error = err.message; render(); }
-      };
-    }
-
-    const ciForm = document.getElementById("create-invite-form");
-    if (ciForm) {
-      ciForm.onsubmit = async (e) => {
-        e.preventDefault();
-        state.error = null; state.notice = null;
-        const role = e.target.role.value;
-        const project_ids = Array.from(e.target.project_ids.selectedOptions).map((o) => o.value);
-        try {
-          const inv = await api("/api/admin/invites", { method: "POST", body: JSON.stringify({ role, project_ids }) });
-          state.notice = `Created invite code: ${inv.code}`;
-          await loadAuthenticatedData();
-        } catch (err) { state.error = err.message; render(); }
-      };
-    }
-
-    document.querySelectorAll("[data-revoke-uid]").forEach((btn) => {
-      btn.onclick = async () => {
-        state.error = null; state.notice = null;
-        try {
-          await api(`/api/admin/users/${btn.dataset.revokeUid}/revoke-sessions`, { method: "POST" });
-          state.notice = "User sessions revoked.";
-          await loadAuthenticatedData();
-        } catch (err) { state.error = err.message; render(); }
-      };
-    });
-
     document.querySelectorAll("[data-asm-scope]").forEach((btn) => {
       btn.onclick = async () => {
         state.asmScope = btn.dataset.asmScope;
@@ -2430,7 +2250,6 @@
     }
   }
 
-  setInterval(() => { if (state.projectTab === "kanban" && state.user && !kanban.editing && !document.querySelector(".kanban-card:active")) void loadKanban().catch(() => {}); }, 1500);
   async function start() {
     try {
       const bindings = await import("/leptos_gateway.js");

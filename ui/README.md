@@ -4,9 +4,9 @@ The Gateway serves the files in `ui/dist` from its Rust binary. The Tauri
 dashboard window loads the selected Gateway's copy of the same frontend.
 
 The Leptos CSR views in `ui/src/browser.rs` mount the sign-in, first administrator,
-invite redemption, project selection, and Cron workspace. The dashboard uses the existing
-JavaScript workspace views for chat, terminal, file and Git browsing, Kanban,
-and administration.
+invite redemption, project selection, Kanban, Cron, and the Users and Projects
+administration tab. JavaScript handles the remaining dashboard views, including
+chat, terminals, file and Git browsing, CLI accounts, and Agents, Skills, and MCP.
 
 When editing a Leptos view or updating wasm-bindgen, rebuild the browser assets
 from the workspace root. Use the `wasm-bindgen-cli` version that matches the
