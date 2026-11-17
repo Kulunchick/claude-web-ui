@@ -8,7 +8,8 @@ pub(super) struct ProcessTree(Option<i32>);
 impl ProcessTree {
     pub(super) fn spawn(command: &mut Command) -> io::Result<(Child, Self)> {
         let child = command.process_group(0).spawn()?;
-        Ok((child, Self(child.id().map(|pid| pid as i32))))
+        let group_id = child.id().map(|pid| pid as i32);
+        Ok((child, Self(group_id)))
     }
 
     pub(super) fn reaped(&mut self) {
