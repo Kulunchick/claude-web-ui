@@ -54,6 +54,8 @@
     ptyTerminal: null,
     projectTab: "chat",
     chatSocket: null,
+    nativeTranscriptSocket: null,
+    nativeTranscriptSessionId: null,
     sessions: [],
     activeSessionId: null,
     activeSessionDetail: null,
@@ -121,6 +123,7 @@
   }
 
   function closeChatSocket() {
+    closeNativeTranscript();
     if (state.chatSocket) {
       try { state.chatSocket.close(); } catch {}
       state.chatSocket = null;
@@ -151,6 +154,7 @@
     state.sessions = [];
     state.activeSessionId = null;
     state.activeSessionDetail = null;
+    state.nativeTranscriptSessionId = null;
     state.showProjectTerminal = false;
     localStorage.removeItem("cwu_access_token");
     localStorage.removeItem("cwu_refresh_token");
@@ -202,6 +206,7 @@
     if (!state.activeProjectId) {
       state.sessions = [];
       state.activeSessionDetail = null;
+      closeNativeTranscript();
       return;
     }
     try {
@@ -221,6 +226,8 @@
     } catch {
       state.sessions = [];
       state.activeSessionDetail = null;
+    } finally {
+      connectNativeTranscript();
     }
   }
 
@@ -231,6 +238,7 @@
     const wsUrl = `${proto}//${window.location.host}/api/projects/${encodeURIComponent(projectId)}/chat/ws?token=${encodeURIComponent(state.accessToken)}`;
     const ws = new WebSocket(wsUrl);
     state.chatSocket = ws;
+    connectNativeTranscript();
     ws.onmessage = async (ev) => {
       try {
         const msg = JSON.parse(ev.data);
@@ -243,6 +251,71 @@
           if (state.projectTab === "chat") render();
         }
       } catch {}
+    };
+  }
+
+
+  function closeNativeTranscript() {
+    const current = state.nativeTranscriptSocket;
+    state.nativeTranscriptSocket = null;
+    if (current) current.socket.close();
+  }
+
+  function displaysNativeTranscript(detail) {
+    return Boolean(detail?.session.transcript_path) && (!detail.turns?.length
+      || state.nativeTranscriptSessionId === detail.session.id);
+  }
+
+  function connectNativeTranscript() {
+    const detail = state.activeSessionDetail;
+    const projectId = state.activeProjectId;
+    const sessionId = state.activeSessionId;
+    const current = state.nativeTranscriptSocket;
+    if (!displaysNativeTranscript(detail) || !projectId || !sessionId || !state.accessToken) {
+      closeNativeTranscript();
+      return;
+    }
+    if (current?.projectId === projectId && current.sessionId === sessionId) return;
+    closeNativeTranscript();
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const sessionPath = `/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`;
+    const socket = new WebSocket(`${proto}//${window.location.host}${sessionPath}/transcript/ws?token=${encodeURIComponent(state.accessToken)}`);
+    const connection = { projectId, sessionId, socket };
+    state.nativeTranscriptSocket = connection;
+    const isCurrent = () => state.nativeTranscriptSocket === connection
+      && state.activeProjectId === projectId && state.activeSessionId === sessionId;
+    let refreshPending = false;
+    let refreshing = false;
+
+    socket.onclose = () => {
+      if (state.nativeTranscriptSocket === connection) state.nativeTranscriptSocket = null;
+    };
+    socket.onmessage = async (message) => {
+      const update = JSON.parse(message.data);
+      if (!isCurrent() || update.session_id !== sessionId) return;
+      if (update.type !== "native_transcript_ready" && update.type !== "native_transcript_appended") return;
+      // Refresh the canonical native snapshot so records already loaded over HTTP are not appended twice.
+      refreshPending = true;
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        while (refreshPending && isCurrent()) {
+          refreshPending = false;
+          const latest = await api(sessionPath);
+          if (!isCurrent() || !displaysNativeTranscript(latest) || !displaysNativeTranscript(state.activeSessionDetail)) return;
+          state.activeSessionDetail = latest;
+          const feed = state.tab === "overview" && state.projectTab === "chat" && app.querySelector(".chat-feed");
+          if (feed) {
+            feed.innerHTML = renderNativeMessages(latest.native_messages)
+              || "<p class='subtitle'>Select or create a session and send a prompt.</p>";
+          }
+        }
+      } catch {
+        // Ordinary session refresh remains available if the native file disappears.
+      } finally {
+        refreshing = false;
+      }
     };
   }
 
@@ -1134,6 +1207,14 @@
     }
   }
 
+  function renderNativeMessages(messages = []) {
+    return messages.map((message) => `
+      <article class="turn-card">
+        <strong>${esc(message.role)}${message.tool_name ? ` (${esc(message.tool_name)})` : ""}</strong>
+        <pre class="event-text">${esc(message.text)}</pre>
+      </article>`).join("");
+  }
+
   function renderProjectWorkspace(activeProject) {
     if (!activeProject) {
       return `
@@ -1160,15 +1241,11 @@
       </li>
     `).join("");
 
-    const nativeHtml = detail && detail.native_messages && detail.native_messages.length > 0 && (!detail.turns || detail.turns.length === 0)
-      ? detail.native_messages.map((m) => `
-        <article class="turn-card">
-          <strong>${esc(m.role)}${m.tool_name ? ` (${esc(m.tool_name)})` : ""}</strong>
-          <pre class="event-text">${esc(m.text)}</pre>
-        </article>`).join("")
-      : "";
+    const nativeSource = displaysNativeTranscript(detail);
+    const nativeHtml = nativeSource ? renderNativeMessages(detail.native_messages) : "";
+    const canSwitchChatSource = Boolean(detail?.session.transcript_path && detail.turns?.length);
 
-    const turnsHtml = detail && detail.turns ? detail.turns.map((t) => {
+    const turnsHtml = !nativeSource && detail?.turns ? detail.turns.map((t) => {
       const pending = t.pending_permission;
       const approvalCard = pending && !isViewer ? `
         <div class="approval-card" data-view="approval-prompt">
@@ -1242,6 +1319,7 @@
               </div>` : `<span class="role-badge">Read-Only Stream</span>`}
           </div>
 
+          ${canSwitchChatSource ? `<button class="btn-secondary" id="chat-feed-source" type="button">${nativeSource ? "Gateway Turns" : "Native Transcript"}</button>` : ""}
           <div class="chat-feed">
             ${nativeHtml}${turnsHtml || (!nativeHtml ? "<p class='subtitle'>Select or create a session and send a prompt.</p>" : "")}
           </div>
@@ -1627,6 +1705,15 @@
       toggleGi.onchange = async () => {
         state.respectGitignore = toggleGi.checked;
         await loadProjectWorkspace();
+        render();
+      };
+    }
+
+    const chatSource = document.getElementById("chat-feed-source");
+    if (chatSource) {
+      chatSource.onclick = () => {
+        state.nativeTranscriptSessionId = displaysNativeTranscript(state.activeSessionDetail) ? null : state.activeSessionId;
+        connectNativeTranscript();
         render();
       };
     }

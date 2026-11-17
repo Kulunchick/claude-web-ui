@@ -849,6 +849,36 @@ async fn native_jsonl_session_discovery_and_cross_account_resume_continuity() {
     assert_eq!(detail.native_messages[1].role, "thinking");
     assert_eq!(detail.native_messages[2].text, "Applied fix to migration.");
 
+    let (addr, server_task) = h.spawn_tcp().await;
+    let (mut transcript, _) = tokio_tungstenite::connect_async(format!(
+        "ws://{addr}/api/projects/{}/sessions/{}/transcript/ws?token={}",
+        project.id, discovered_claude.id, admin.access_token,
+    ))
+    .await
+    .expect("subscriber can open the discovered session transcript");
+    let ready = transcript.next().await.unwrap().unwrap().into_text().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&ready).unwrap()["type"], "native_transcript_ready");
+    let mut transcript_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(claude_proj_dir.join("ssh-claude-42.jsonl"))
+        .unwrap();
+    use std::io::Write;
+    transcript_file.write_all(b"\n").unwrap();
+    transcript_file.write_all(br#"{"role":"assistant","#).unwrap();
+    use std::time::Duration;
+    assert!(tokio::time::timeout(Duration::from_millis(480), transcript.next()).await.is_err());
+    transcript_file.write_all(br#""text":"Native-only progress"}"#).unwrap();
+    transcript_file.write_all(b"\n").unwrap();
+    let next = tokio::time::timeout(Duration::from_secs(3), transcript.next())
+        .await.unwrap().unwrap().unwrap().into_text().unwrap();
+    let batch: Value = serde_json::from_str(&next).unwrap();
+    assert_eq!(batch["type"], "native_transcript_appended");
+    assert_eq!(batch["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(batch["entries"][0]["text"], "Native-only progress");
+    assert!(tokio::time::timeout(Duration::from_millis(480), transcript.next()).await.is_err());
+    transcript.close(None).await.unwrap();
+    server_task.abort();
+
     // Cross-account --resume continuity:
     // Start a fresh Gateway session on Account A
     let (status, _) = h

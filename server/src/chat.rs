@@ -1,4 +1,5 @@
 mod process_tree;
+mod transcript;
 
 use crate::accounts::{
     account_env_vars, authorize_turn_account, bridge_pty_websocket, resolve_project_cli_account,
@@ -1177,6 +1178,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/projects/{project_id}/scheduler", get(get_scheduler_status))
         .route("/api/projects/{project_id}/chat/ws", get(chat_ws_handler))
         .route(
+            "/api/projects/{project_id}/sessions/{session_id}/transcript/ws",
+            get(transcript::websocket),
+        )
+        .route(
             "/api/projects/{project_id}/terminal/ws",
             get(project_terminal_ws),
         )
@@ -1461,6 +1466,10 @@ pub fn parse_native_jsonl_transcript(path: &StdPath) -> Vec<NativeTranscriptEntr
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
+    parse_native_jsonl_records(&raw)
+}
+
+fn parse_native_jsonl_records(raw: &str) -> Vec<NativeTranscriptEntryDto> {
     let mut out = Vec::new();
     for line in raw.lines() {
         let trimmed = line.trim();
