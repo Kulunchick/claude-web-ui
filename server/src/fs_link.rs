@@ -66,3 +66,23 @@ pub fn unlink_dir(link: &Path) -> io::Result<()> {
         std::fs::remove_dir(link)
     }
 }
+
+/// Returns `true` if `path` exists as a symlink or (on Windows) an NTFS directory junction/reparse point.
+pub fn is_dir_link(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}

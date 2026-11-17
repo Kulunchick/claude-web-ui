@@ -7,12 +7,14 @@ pub mod files_git_view;
 pub mod kanban_view;
 
 use accounts_view::{AccountsManagerView, HeaderCliSwitcher};
+use agents_skills_mcp_view::AgentsSkillsMcpView;
 use auth_view::{
     AdminUsersProjectsView, AuthScreen, BootstrapAdminView, DashboardTab, InviteRedemptionView,
     LoginView, ProjectSwitcherSidebar,
 };
 use chat_view::ChatWorkspaceView;
 use claude_web_ui_shared::accounts::{CliAccountDto, ProjectCliStateDto};
+use claude_web_ui_shared::agents::{McpPresetDto, ProviderMcpConfigDto, SkillDto, SubagentDto};
 use claude_web_ui_shared::auth::{ProjectDto, UserDto};
 use claude_web_ui_shared::chat::{ChatSessionDto, ChatTurnDto};
 use files_git_view::WorkspaceFilesGitView;
@@ -28,6 +30,10 @@ pub fn GatewayApp(
     #[prop(optional)] initial_project_cli: Option<ProjectCliStateDto>,
     #[prop(default = Vec::new())] initial_sessions: Vec<ChatSessionDto>,
     #[prop(default = Vec::new())] initial_turns: Vec<ChatTurnDto>,
+    #[prop(default = Vec::new())] initial_subagents: Vec<SubagentDto>,
+    #[prop(default = Vec::new())] initial_skills: Vec<SkillDto>,
+    #[prop(optional)] initial_mcp_config: Option<ProviderMcpConfigDto>,
+    #[prop(default = Vec::new())] initial_presets: Vec<McpPresetDto>,
 ) -> impl IntoView {
     let initial_screen = if initialized {
         AuthScreen::Login
@@ -103,6 +109,16 @@ pub fn GatewayApp(
                                     }.into_any(),
                                 }
                             }
+                            DashboardTab::AgentsSkillsMcp => view! {
+                                <AgentsSkillsMcpView
+                                    current_role=current_role
+                                    active_project_id=active_project_id.read_only()
+                                    initial_subagents=initial_subagents.clone()
+                                    initial_skills=initial_skills.clone()
+                                    initial_mcp_config=initial_mcp_config.clone()
+                                    initial_presets=initial_presets.clone()
+                                />
+                            }.into_any(),
                             DashboardTab::AdminUsersProjects => view! {
                                 <AdminUsersProjectsView users=users projects=projects />
                             }.into_any(),
