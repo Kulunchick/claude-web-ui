@@ -23,7 +23,7 @@ pub(super) async fn request(
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::unauthorized("missing run token"))?;
     let run = sqlx::query(
-        "SELECT c.run_user_id FROM kanban_cards c JOIN chat_turns t ON t.id = c.turn_id
+        "SELECT c.run_user_id, t.account_id FROM kanban_cards c JOIN chat_turns t ON t.id = c.turn_id
          WHERE c.project_id = ? AND c.run_token = ? AND c.active_run = 1
          AND t.status IN ('running','waiting_approval')",
     )
@@ -33,6 +33,8 @@ pub(super) async fn request(
     .await?
     .ok_or_else(|| AppError::unauthorized("invalid or expired run token"))?;
     let user: String = run.try_get("run_user_id")?;
+    let account: Option<String> = run.try_get("account_id")?;
+    super::worker::authorize(&state.db, &project, &user, account.as_deref()).await?;
     if rpc.get("id").is_none() {
         return Ok(StatusCode::ACCEPTED.into_response());
     }

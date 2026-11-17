@@ -272,7 +272,7 @@ struct QueuedTurnJob {
 #[derive(Clone)]
 pub struct ExecutionScheduler {
     db: SqlitePool,
-    _config: Arc<GatewayConfig>,
+    config: Arc<GatewayConfig>,
     cli_runner: Arc<dyn CliRunner>,
     inner: Arc<Mutex<SchedulerInner>>,
     job_tx: mpsc::UnboundedSender<QueuedTurnJob>,
@@ -290,7 +290,7 @@ impl ExecutionScheduler {
         let (events_tx, _) = broadcast::channel(512);
         let scheduler = Self {
             db,
-            _config: config,
+            config,
             cli_runner,
             inner: Arc::new(Mutex::new(SchedulerInner::default())),
             job_tx,
@@ -674,7 +674,7 @@ impl ExecutionScheduler {
         });
 
         let _mcp_config = match crate::kanban::prepare_invocation(
-            &self.db, &job.project_id, &job.turn_id, &self._config.kanban_mcp_url, &mut invocation,
+            &self.db, &job.project_id, &job.turn_id, &self.config.kanban_mcp_url, &mut invocation,
         ).await {
             Ok(config) => config,
             Err(error) => {

@@ -32,8 +32,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "[::1]"
     };
     let mut config = GatewayConfig::for_data_dir(&data_dir);
+    let bridge_listener = if local_addr.ip().is_loopback() || local_addr.ip().is_unspecified() {
+        None
+    } else {
+        Some(tokio::net::TcpListener::bind(format!("{loopback}:0")).await?)
+    };
+    let bridge_port = bridge_listener
+        .as_ref()
+        .map(|listener| listener.local_addr())
+        .transpose()?
+        .unwrap_or(local_addr)
+        .port();
     config.kanban_mcp_url = std::env::var("CLAUDE_WEB_UI_MCP_URL")
-        .unwrap_or_else(|_| format!("http://{loopback}:{}", local_addr.port()));
+        .unwrap_or_else(|_| format!("http://{loopback}:{bridge_port}"));
     if let Ok(secret) = std::env::var("CLAUDE_WEB_UI_JWT_SECRET") {
         config.jwt_secret = secret;
     } else {
@@ -56,6 +67,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     tracing::info!("claude-web-ui gateway listening on http://{}", bind_addr);
-    axum::serve(listener, server.router()).await?;
+    if let Some(bridge_listener) = bridge_listener {
+        tokio::try_join!(
+            async { axum::serve(listener, server.router()).await },
+            async { axum::serve(bridge_listener, server.kanban_mcp_router()).await },
+        )?;
+    } else {
+        axum::serve(listener, server.router()).await?;
+    }
     Ok(())
 }

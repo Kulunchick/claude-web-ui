@@ -42,7 +42,11 @@ pub(crate) fn router(state: AppState) -> Router<AppState> {
             state,
             project_rbac_middleware,
         ))
-        .route("/api/mcp/kanban/{project_id}", post(mcp::request))
+        .merge(mcp_router())
+}
+
+pub(crate) fn mcp_router() -> Router<AppState> {
+    Router::new().route("/api/mcp/kanban/{project_id}", post(mcp::request))
 }
 
 const CARD_SELECT: &str = "
@@ -205,7 +209,7 @@ async fn create_card(
     .bind(project)
     .bind(lane)
     .bind(req.create_git_branch)
-    .bind(req.git_branch_name)
+    .bind(req.git_branch_name.filter(|_| req.create_git_branch))
     .bind(user)
     .bind(user)
     .bind(&now)
@@ -244,7 +248,10 @@ async fn update_card(
     .bind(req.description)
     .bind(req.create_git_branch)
     .bind(req.create_git_branch == Some(false))
-    .bind(req.git_branch_name)
+    .bind(
+        req.git_branch_name
+            .filter(|_| req.create_git_branch.unwrap_or(current.create_git_branch)),
+    )
     .bind(Utc::now().to_rfc3339())
     .bind(project)
     .bind(id)

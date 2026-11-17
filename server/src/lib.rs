@@ -151,6 +151,10 @@ impl GatewayServer {
         &self.state.messenger
     }
 
+    pub fn kanban_mcp_router(&self) -> Router {
+        kanban::mcp_router().with_state(self.state.clone())
+    }
+
     pub fn subscribe_kanban(
         &self,
     ) -> tokio::sync::broadcast::Receiver<claude_web_ui_shared::kanban::KanbanCardDto> {

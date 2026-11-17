@@ -130,20 +130,24 @@ async fn tick(state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn authorized(db: &SqlitePool, project: &str, user: &str) -> Result<(), AppError> {
+pub(super) async fn authorize(
+    db: &SqlitePool,
+    project: &str,
+    user: &str,
+    account: Option<&str>,
+) -> Result<(), AppError> {
     let allowed: bool = sqlx::query_scalar(
         "SELECT EXISTS (
            SELECT 1 FROM users u
            LEFT JOIN project_memberships m ON m.user_id = u.id AND m.project_id = ?
            LEFT JOIN project_member_acl_settings a ON a.user_id = u.id AND a.project_id = m.project_id
-           LEFT JOIN project_active_cli p ON p.project_id = m.project_id
            LEFT JOIN project_member_allowed_accounts l ON l.user_id = u.id AND l.project_id = m.project_id
-             AND l.account_id = p.active_account_id
+             AND l.account_id = ?
            WHERE u.id = ? AND (u.role = 'admin' OR
              (m.user_id IS NOT NULL AND COALESCE(m.role_override, u.role) IN ('admin','developer')
                AND (COALESCE(a.restrict_accounts, 0) = 0 OR l.account_id IS NOT NULL)))
         )"
-    ).bind(project).bind(user).fetch_one(db).await?;
+    ).bind(project).bind(account).bind(user).fetch_one(db).await?;
     if !allowed {
         return Err(AppError::forbidden(
             "Account or project access no longer permits running this card",
@@ -159,7 +163,14 @@ async fn launch(
     user: &str,
     decomposing: bool,
 ) -> Result<(), AppError> {
-    authorized(&state.db, project, user).await?;
+    let (_, account, _) = crate::accounts::resolve_project_cli_env(&state.db, project).await?;
+    authorize(
+        &state.db,
+        project,
+        user,
+        account.as_ref().map(|account| account.id.as_str()),
+    )
+    .await?;
     let card = find_card(&mut *state.db.acquire().await?, project, id).await?;
     let session_id = match card.session_id {
         Some(id) => id,
@@ -255,8 +266,9 @@ pub(crate) async fn prepare_invocation(
     invocation: &mut CliInvocation,
 ) -> Result<Option<McpConfigFile>, AppError> {
     let run = sqlx::query(
-        "SELECT id, run_token, run_user_id, create_git_branch, git_branch_name, decompose
-         FROM kanban_cards WHERE project_id = ? AND turn_id = ? AND active_run = 1",
+        "SELECT c.id, c.run_token, c.run_user_id, c.create_git_branch, c.git_branch_name, c.decompose, t.account_id
+         FROM kanban_cards c JOIN chat_turns t ON t.id = c.turn_id
+         WHERE c.project_id = ? AND c.turn_id = ? AND c.active_run = 1",
     )
     .bind(project)
     .bind(turn_id)
@@ -266,7 +278,8 @@ pub(crate) async fn prepare_invocation(
         return Ok(None);
     };
     let user: String = run.try_get("run_user_id")?;
-    authorized(db, project, &user).await?;
+    let account: Option<String> = run.try_get("account_id")?;
+    authorize(db, project, &user, account.as_deref()).await?;
     let id: String = run.try_get("id")?;
     let branch_requested: bool = run.try_get("create_git_branch")?;
     let decomposing: bool = run.try_get("decompose")?;
