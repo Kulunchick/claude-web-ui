@@ -1,0 +1,59 @@
+name: Gateway release
+
+# Builds the Linux Gateway on every push to main and publishes it to the
+# rolling `gateway-latest` release. Servers poll that release with
+# deploy/update.sh and install new builds.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gateway-release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    # Ubuntu 22.04 keeps the glibc requirement low enough for Debian 12 and
+    # Ubuntu 22.04+ servers.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked -p claude-web-ui-shared -p claude-web-ui-server
+
+      - name: Build
+        run: cargo build --locked --release -p claude-web-ui-server
+
+      - name: Package
+        run: |
+          mkdir -p out
+          cp target/release/claude-web-ui-server out/claude-web-ui-server-linux-x86_64
+          cd out
+          sha256sum claude-web-ui-server-linux-x86_64 > claude-web-ui-server-linux-x86_64.sha256
+          echo "${GITHUB_SHA}" > version.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view gateway-latest >/dev/null 2>&1; then
+            gh release create gateway-latest --title "Gateway (latest main)" \
+              --notes "Rolling Linux build of the Gateway from main." --latest=false
+          fi
+          # Upload the binary before version.txt so a polling server never sees
+          # a new version whose binary is not there yet.
+          gh release upload gateway-latest --clobber \
+            out/claude-web-ui-server-linux-x86_64 \
+            out/claude-web-ui-server-linux-x86_64.sha256
+          gh release upload gateway-latest --clobber out/version.txt
+          gh release edit gateway-latest --notes "Rolling Linux build of the Gateway from main. Commit: ${GITHUB_SHA}"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Install the latest Claude Web UI Gateway build
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Shares CLAUDE_WEB_UI_HEALTH_URL and other settings with the Gateway.
+EnvironmentFile=-/etc/claude-web-ui.env
+ExecStart=/opt/claude-web-ui/update.sh

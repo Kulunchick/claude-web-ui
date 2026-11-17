@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Web UI Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claude-web
+Group=claude-web
+WorkingDirectory=/var/lib/claude-web-ui
+EnvironmentFile=/etc/claude-web-ui.env
+ExecStart=/opt/claude-web-ui/bin/claude-web-ui-server
+Restart=on-failure
+RestartSec=3
+# Stopping the Gateway also stops the CLI processes it started.
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
