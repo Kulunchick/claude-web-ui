@@ -770,7 +770,29 @@ impl CliRunner for PortablePtyCliRunner {
     }
 }
 
-async fn load_acl_state(
+pub(crate) async fn authorize_turn_account(
+    db: &SqlitePool,
+    project_id: &str,
+    user_id: &str,
+    account_id: Option<&str>,
+) -> Result<(), AppError> {
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    let role: Role = role.ok_or_else(|| AppError::forbidden("user no longer exists"))?
+        .parse().map_err(|error: String| AppError::internal(error))?;
+    let effective_role = crate::auth::project_role(db, user_id, role, project_id, true).await?;
+    if effective_role != Role::Admin {
+        let (restricted, allowed) = load_acl_state(db, user_id, project_id).await?;
+        if restricted && !account_id.is_some_and(|id| allowed.iter().any(|candidate| candidate == id)) {
+            return Err(AppError::forbidden("you are not permitted to use this CLI account"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_acl_state(
     db: &SqlitePool,
     user_id: &str,
     project_id: &str,
@@ -972,7 +994,7 @@ async fn update_member_account_acl(
     }))
 }
 
-async fn build_project_cli_state(
+pub(crate) async fn build_project_cli_state(
     db: &SqlitePool,
     ctx: &ProjectContext,
 ) -> Result<ProjectCliStateDto, AppError> {
@@ -1060,13 +1082,21 @@ async fn switch_project_cli(
     Extension(ctx): Extension<ProjectContext>,
     Json(req): Json<SwitchProjectCliRequest>,
 ) -> Result<Json<ProjectCliStateDto>, AppError> {
+    Ok(Json(select_project_cli(&state, &ctx, req).await?))
+}
+
+pub(crate) async fn select_project_cli(
+    state: &AppState,
+    ctx: &ProjectContext,
+    req: SwitchProjectCliRequest,
+) -> Result<ProjectCliStateDto, AppError> {
     if ctx.effective_role == Role::Viewer {
         return Err(AppError::forbidden("viewer role cannot switch cli accounts"));
     }
 
     let resolved_account_id = match req.account_id {
         Some(aid) => {
-            let acc = load_account(&state, &aid).await?;
+            let acc = load_account(state, &aid).await?;
             if acc.provider != req.provider {
                 return Err(AppError::bad_request(format!(
                     "account {} belongs to {} rather than {}",
@@ -1148,7 +1178,7 @@ async fn switch_project_cli(
     }
 
     record_audit_log(
-        &state,
+        state,
         Some(&ctx.user.user.id),
         "switch_project_cli",
         Some("project"),
@@ -1157,7 +1187,7 @@ async fn switch_project_cli(
     )
     .await?;
 
-    Ok(Json(build_project_cli_state(&state.db, &ctx).await?))
+    build_project_cli_state(&state.db, ctx).await
 }
 
 /// Resolves the active provider, optional account profile, and isolated env vars

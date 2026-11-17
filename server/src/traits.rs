@@ -58,6 +58,23 @@ pub enum MessengerPlatform {
     Discord,
 }
 
+impl MessengerPlatform {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Telegram => "telegram",
+            Self::Discord => "discord",
+        }
+    }
+
+    pub(crate) fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "telegram" => Some(Self::Telegram),
+            "discord" => Some(Self::Discord),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InlineButton {
     pub label: String,
@@ -79,6 +96,7 @@ pub struct IncomingMessengerEvent {
     pub chat_id: String,
     pub thread_id: Option<String>,
     pub external_user_id: String,
+    pub is_private: bool,
     pub text: Option<String>,
     pub callback_data: Option<String>,
 }

@@ -280,8 +280,22 @@ async fn move_inner(
     user: &str,
     req: MoveKanbanCardRequest,
 ) -> Result<KanbanCardDto, AppError> {
+    move_expected(state, project, id, user, None, req).await
+}
+
+pub(crate) async fn move_expected(
+    state: &AppState,
+    project: &str,
+    id: &str,
+    user: &str,
+    expected: Option<Column>,
+    req: MoveKanbanCardRequest,
+) -> Result<KanbanCardDto, AppError> {
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let current = find_card(&mut tx, project, id).await?;
+    if expected.is_some_and(|expected| expected != current.column) {
+        return Err(AppError::conflict("card has moved since this notification"));
+    }
     let target = match (req.column, current.column) {
         (Column::Running, Column::Running) => Column::Running,
         (Column::Running, _) => Column::Ready,

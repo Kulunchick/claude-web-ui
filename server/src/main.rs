@@ -1,5 +1,5 @@
 use claude_web_ui_server::accounts::PortablePtyCliRunner;
-use claude_web_ui_server::fakes::FakeMessengerTransport;
+use claude_web_ui_server::messenger::transport::BotTransport;
 use claude_web_ui_server::{GatewayConfig, GatewayServer};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -59,12 +59,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
 
+    let messenger = Arc::new(BotTransport::new(
+        std::env::var("CLAUDE_WEB_UI_TELEGRAM_TOKEN").ok(),
+        std::env::var("CLAUDE_WEB_UI_DISCORD_TOKEN").ok(),
+    ));
     let server = GatewayServer::new(
         config,
         Arc::new(PortablePtyCliRunner::new()),
-        Arc::new(FakeMessengerTransport::new()),
+        messenger.clone(),
     )
     .await?;
+
+    messenger.start(&server);
 
     tracing::info!("claude-web-ui gateway listening on http://{}", bind_addr);
     if let Some(bridge_listener) = bridge_listener {

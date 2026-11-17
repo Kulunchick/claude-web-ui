@@ -204,6 +204,66 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_kanban_active_run
             ON kanban_cards(active_run) WHERE active_run = 1;
 
+        CREATE TABLE IF NOT EXISTS messenger_pairing_codes (
+            code TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            expires_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS messenger_pairing_attempts (
+            platform TEXT NOT NULL,
+            external_user_id TEXT NOT NULL,
+            attempted_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_messenger_attempts_time
+            ON messenger_pairing_attempts(attempted_at);
+
+        CREATE TABLE IF NOT EXISTS user_messenger_links (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            platform TEXT NOT NULL,
+            external_user_id TEXT NOT NULL,
+            dm_chat_id TEXT NOT NULL,
+            PRIMARY KEY (platform, external_user_id),
+            UNIQUE (user_id, platform)
+        );
+
+        CREATE TABLE IF NOT EXISTS messenger_dm_contexts (
+            platform TEXT NOT NULL,
+            external_user_id TEXT NOT NULL,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+            PRIMARY KEY (platform, external_user_id),
+            FOREIGN KEY (platform, external_user_id)
+                REFERENCES user_messenger_links(platform, external_user_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS messenger_channels (
+            platform TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            notify INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (platform, chat_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS messenger_threads (
+            platform TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            session_id TEXT NOT NULL UNIQUE REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            PRIMARY KEY (platform, chat_id, thread_id),
+            FOREIGN KEY (platform, chat_id)
+                REFERENCES messenger_channels(platform, chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS messenger_dm_notifications (
+            platform TEXT NOT NULL,
+            external_user_id TEXT NOT NULL,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            PRIMARY KEY (platform, external_user_id, project_id),
+            FOREIGN KEY (platform, external_user_id)
+                REFERENCES user_messenger_links(platform, external_user_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS kanban_dependencies (
             card_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
             blocker_id TEXT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,

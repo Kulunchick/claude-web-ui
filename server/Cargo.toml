@@ -27,6 +27,8 @@ rand = "0.8"
 portable-pty = "0.9"
 serde_yaml_ng = "0.10"
 toml = "1"
+teloxide = { version = "0.17", default-features = false, features = ["rustls"] }
+serenity = { version = "0.12", default-features = false, features = ["builder", "client", "gateway", "http", "model", "rustls_backend"] }
 
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

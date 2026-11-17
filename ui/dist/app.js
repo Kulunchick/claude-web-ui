@@ -74,6 +74,7 @@
     diffStaged: false,
     error: null,
     notice: null,
+    messengerPairing: null,
   };
 
   const app = document.getElementById("app");
@@ -139,6 +140,7 @@
     state.accessToken = null;
     state.refreshToken = null;
     state.user = null;
+    state.messengerPairing = null;
     state.projects = [];
     state.projectCli = null;
     state.adminAccounts = [];
@@ -1129,6 +1131,8 @@
               <button class="nav-item ${state.tab === "accounts" ? "active" : ""}" id="nav-accounts">Admin: CLI Accounts</button>
             </div>` : ""}
           <div class="sidebar-section">
+            <button class="btn-secondary" id="pair-messenger-btn">Pair Telegram or Discord</button>
+            <p class="subtitle" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
             <button class="btn-secondary" id="logout-btn">Sign Out (${esc(state.user.username)})</button>
           </div>
         </aside>
@@ -1870,6 +1874,30 @@
 
     const navAccounts = document.getElementById("nav-accounts");
     if (navAccounts) navAccounts.onclick = () => { state.tab = "accounts"; render(); };
+
+    const pairMessengerButton = document.getElementById("pair-messenger-btn");
+    if (pairMessengerButton) pairMessengerButton.onclick = async () => {
+      const userId = state.user.id;
+      pairMessengerButton.disabled = true;
+      try {
+        const pairing = await api("/api/messenger/pairing-code", { method: "POST" });
+        if (state.user?.id !== userId) return;
+        state.messengerPairing = `Send /pair ${pairing.code} in a bot DM within ${Math.ceil(pairing.expires_in_secs / 60)} minutes.`;
+        setTimeout(() => {
+          if (!state.messengerPairing?.includes(`/pair ${pairing.code} `)) return;
+          state.messengerPairing = null;
+          const result = document.getElementById("pair-messenger-result");
+          if (result) result.textContent = "";
+        }, pairing.expires_in_secs * 1000);
+      } catch (err) {
+        if (state.user?.id !== userId) return;
+        state.messengerPairing = err.message;
+      } finally {
+        const result = document.getElementById("pair-messenger-result");
+        if (result) result.textContent = state.messengerPairing || "";
+        pairMessengerButton.disabled = false;
+      }
+    };
 
     document.getElementById("logout-btn").onclick = async () => {
       try { await api("/api/auth/logout", { method: "POST" }); } catch {}

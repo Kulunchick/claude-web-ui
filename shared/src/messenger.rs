@@ -1,1 +1,9 @@
-//! Shared DTOs for Telegram and Discord gateways (Ticket #9).
+//! Telegram and Discord pairing DTOs.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingCode {
+    pub code: String,
+    pub expires_in_secs: u64,
+}

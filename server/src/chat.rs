@@ -267,6 +267,7 @@ struct QueuedTurnJob {
     session_id: String,
     project_id: String,
     prompt: String,
+    authorize_actor: Option<String>,
 }
 
 #[derive(Clone)]
@@ -373,17 +374,24 @@ impl ExecutionScheduler {
         &self,
         params: EnqueueTurnParams,
     ) -> Result<SendChatTurnResponse, AppError> {
-        self.enqueue_project_turn(params, None).await
+        self.enqueue_project_turn(params, None, false).await
     }
 
     pub(crate) async fn enqueue_kanban_turn(
         &self, params: EnqueueTurnParams, card_id: &str,
     ) -> Result<SendChatTurnResponse, AppError> {
-        self.enqueue_project_turn(params, Some(card_id)).await
+        self.enqueue_project_turn(params, Some(card_id), false).await
+    }
+
+    pub(crate) async fn enqueue_authorized_turn(
+        &self,
+        params: EnqueueTurnParams,
+    ) -> Result<SendChatTurnResponse, AppError> {
+        self.enqueue_project_turn(params, None, true).await
     }
 
     async fn enqueue_project_turn(
-        &self, params: EnqueueTurnParams, card_id: Option<&str>,
+        &self, params: EnqueueTurnParams, card_id: Option<&str>, authorize_actor: bool,
     ) -> Result<SendChatTurnResponse, AppError> {
         let prompt = params.prompt.trim().to_string();
         if prompt.is_empty() {
@@ -402,6 +410,13 @@ impl ExecutionScheduler {
         let account_id = active_account
             .filter(|a| a.provider == provider)
             .map(|a| a.id);
+
+        if authorize_actor {
+            let (_, account_id, _) = self.session_cli(&session).await?;
+            crate::accounts::authorize_turn_account(
+                &self.db, &params.project_id, &params.user_id, account_id.as_deref()
+            ).await?;
+        }
 
         let turn_id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -448,6 +463,7 @@ impl ExecutionScheduler {
             session_id: params.session_id.clone(),
             project_id: params.project_id.clone(),
             prompt,
+            authorize_actor: authorize_actor.then_some(params.user_id),
         });
 
         let turn = load_chat_turn(&self.db, &params.project_id, &turn_id).await?;
@@ -633,6 +649,25 @@ impl ExecutionScheduler {
         }
     }
 
+    async fn session_cli(
+        &self,
+        session: &ChatSessionDto,
+    ) -> Result<(CliProvider, Option<String>, BTreeMap<String, String>), AppError> {
+        let (active_provider, active_account, active_env) =
+            resolve_project_cli_env(&self.db, &session.project_id).await?;
+
+        // Use session's provider unless the session has not started yet and project switched CLIs,
+        // and always inject the active account env vars when provider matches.
+        let effective_provider = session.provider;
+        let (account_id, env) = if active_provider == effective_provider {
+            (active_account.map(|a| a.id), active_env)
+        } else {
+            resolve_provider_account_env(&self.db, &session.project_id, effective_provider).await?
+        };
+
+        Ok((effective_provider, account_id, env))
+    }
+
     async fn execute_single_turn(&self, job: QueuedTurnJob) -> Result<(), AppError> {
         let session = load_chat_session(&self.db, &job.project_id, &job.session_id).await?;
         let project_workspace: String =
@@ -641,17 +676,17 @@ impl ExecutionScheduler {
                 .fetch_one(&self.db)
                 .await?;
 
-        let (active_provider, active_account, active_env) =
-            resolve_project_cli_env(&self.db, &job.project_id).await?;
-
-        // Use session's provider unless the session has not started yet and project switched CLIs,
-        // and always inject the active account env vars when provider matches.
-        let effective_provider = session.provider;
-        let (account_id, env) = if active_provider == effective_provider {
-            (active_account.map(|a| a.id), active_env)
-        } else {
-            resolve_provider_account_env(&self.db, &job.project_id, effective_provider).await?
-        };
+        let (effective_provider, account_id, env) = self.session_cli(&session).await?;
+        if let Some(user_id) = &job.authorize_actor {
+            if let Err(error) = crate::accounts::authorize_turn_account(
+                &self.db, &job.project_id, user_id, account_id.as_deref(),
+            ).await {
+                sqlx::query("UPDATE chat_turns SET status = 'error', error_message = ?, completed_at = ? WHERE id = ?")
+                    .bind(&error.message).bind(Utc::now().to_rfc3339()).bind(&job.turn_id)
+                    .execute(&self.db).await?;
+                return Err(error);
+            }
+        }
 
         let started_at = Utc::now().to_rfc3339();
         sqlx::query(
@@ -1113,6 +1148,19 @@ pub(crate) async fn create_gateway_session(
         Some(p) => p,
         None => resolve_project_cli_env(db, project_id).await?.0,
     };
+    let mut conn = db.acquire().await?;
+    let id = insert_gateway_session(&mut conn, project_id, user_id, provider, req).await?;
+    drop(conn);
+    load_chat_session(db, project_id, &id).await
+}
+
+pub(crate) async fn insert_gateway_session(
+    conn: &mut sqlx::SqliteConnection,
+    project_id: &str,
+    user_id: &str,
+    provider: CliProvider,
+    req: CreateChatSessionRequest,
+) -> Result<String, AppError> {
     let approval_mode = req.approval_mode.unwrap_or(ApprovalMode::FullAuto);
     let title = req
         .title
@@ -1144,10 +1192,10 @@ pub(crate) async fn create_gateway_session(
     .bind(user_id)
     .bind(&now)
     .bind(&now)
-    .execute(db)
+    .execute(conn)
     .await?;
 
-    load_chat_session(db, project_id, &id).await
+    Ok(id)
 }
 
 fn row_to_chat_session(row: &sqlx::sqlite::SqliteRow) -> Result<ChatSessionDto, AppError> {
@@ -1211,7 +1259,7 @@ fn row_to_chat_turn(row: &sqlx::sqlite::SqliteRow) -> Result<ChatTurnDto, AppErr
     })
 }
 
-async fn load_chat_session(
+pub(crate) async fn load_chat_session(
     db: &SqlitePool,
     project_id: &str,
     session_id: &str,
@@ -1261,7 +1309,7 @@ async fn load_session_turns(
     rows.iter().map(row_to_chat_turn).collect()
 }
 
-async fn load_chat_turn(
+pub(crate) async fn load_chat_turn(
     db: &SqlitePool,
     project_id: &str,
     turn_id: &str,

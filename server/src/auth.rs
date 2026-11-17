@@ -216,7 +216,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
         .is_ok())
 }
 
-async fn load_user_by_id(state: &AppState, user_id: &str) -> Result<Option<UserDto>, AppError> {
+pub(crate) async fn load_user_by_id(state: &AppState, user_id: &str) -> Result<Option<UserDto>, AppError> {
     let row = sqlx::query("SELECT id, username, email, role, created_at FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_optional(&state.db)
@@ -248,7 +248,7 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow) -> Result<ProjectDto, AppError>
     })
 }
 
-async fn load_accessible_projects(
+pub(crate) async fn load_accessible_projects(
     state: &AppState,
     user: &UserDto,
 ) -> Result<Vec<ProjectDto>, AppError> {
@@ -619,58 +619,63 @@ pub async fn project_rbac_middleware(
     let project_id = extract_project_id_from_path(req.uri().path())
         .ok_or_else(|| AppError::bad_request("missing project_id in path"))?;
 
+    let write = req.method() != Method::GET && req.method() != Method::HEAD;
+    let ctx = authorize_project(&state, auth, &project_id, write).await?;
+    req.extensions_mut().insert(ctx);
+    Ok(next.run(req).await)
+}
+
+pub(crate) async fn authorize_project(
+    state: &AppState,
+    auth: AuthUser,
+    project_id: &str,
+    write: bool,
+) -> Result<ProjectContext, AppError> {
     let project_row = sqlx::query(
         "SELECT id, name, slug, workspace_path, created_at FROM projects WHERE id = ?",
     )
-    .bind(&project_id)
+    .bind(project_id)
     .fetch_optional(&state.db)
     .await?;
 
-    let effective_role = if auth.user.role == Role::Admin {
-        if project_row.is_none() {
-            return Err(AppError::not_found("project not found"));
-        }
-        Role::Admin
-    } else {
-        let membership: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT role_override FROM project_memberships WHERE user_id = ? AND project_id = ?",
-        )
-        .bind(&auth.user.id)
-        .bind(&project_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-        let Some(role_override) = membership else {
-            return Err(AppError::forbidden("project access denied"));
-        };
-
-        let role = match role_override {
-            Some(r) => r
-                .parse()
-                .map_err(|e: String| AppError::internal(format!("corrupt role_override: {e}")))?,
-            None => auth.user.role,
-        };
-
-        let method = req.method();
-        if role == Role::Viewer && method != Method::GET && method != Method::HEAD {
-            return Err(AppError::forbidden("viewer role is read-only"));
-        }
-        role
-    };
-
+    let effective_role = project_role(&state.db, &auth.user.id, auth.user.role, project_id, write).await?;
     let project = project_row
         .as_ref()
         .map(row_to_project)
         .transpose()?
         .ok_or_else(|| AppError::not_found("project not found"))?;
+    Ok(ProjectContext { user: auth, project, effective_role })
+}
 
-    req.extensions_mut().insert(ProjectContext {
-        user: auth,
-        project,
-        effective_role,
-    });
+pub(crate) async fn project_role(
+    db: &sqlx::SqlitePool,
+    user_id: &str,
+    role: Role,
+    project_id: &str,
+    write: bool,
+) -> Result<Role, AppError> {
+    let effective_role = if role == Role::Admin {
+        Role::Admin
+    } else {
+        let override_role: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT role_override FROM project_memberships WHERE user_id = ? AND project_id = ?",
+        )
+        .bind(user_id)
+        .bind(project_id)
+        .fetch_optional(db)
+        .await?;
 
-    Ok(next.run(req).await)
+        match override_role {
+            None => return Err(AppError::forbidden("project access denied")),
+            Some(None) => role,
+            Some(Some(value)) => value.parse()
+                .map_err(|e: String| AppError::internal(format!("corrupt role_override: {e}")))?,
+        }
+    };
+    if write && effective_role == Role::Viewer {
+        return Err(AppError::forbidden("viewer role is read-only"));
+    }
+    Ok(effective_role)
 }
 
 fn extract_token_from_headers_and_query(
