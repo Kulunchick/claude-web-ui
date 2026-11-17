@@ -129,6 +129,7 @@ impl GatewayServer {
             .merge(workspace_files::router(self.state.clone()))
             .merge(chat::router(self.state.clone()))
             .merge(kanban::router(self.state.clone()))
+            .merge(agents_skills_mcp::router(self.state.clone()))
             .fallback(serve_embedded_ui)
             .layer(CorsLayer::permissive())
             .with_state(self.state.clone())

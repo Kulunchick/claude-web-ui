@@ -5,11 +5,28 @@
     antigravity: "Antigravity",
   };
 
+  const PROVIDER_MODEL_TIERS = {
+    claude_code: ["opus", "sonnet", "haiku", "inherit"],
+    codex: ["gpt-5-codex", "o3", "o4-mini", "codex-mini", "inherit"],
+    antigravity: ["pro", "flash", "flash_lite", "inherit"],
+  };
+
+  const CLAUDE_TOOLS = [
+    "Read", "Edit", "Write", "MultiEdit", "Bash", "Grep", "Glob", "LS",
+    "WebFetch", "WebSearch", "Task", "TodoWrite",
+  ];
+
+  const PERMISSION_MODES = [
+    "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk",
+  ];
+
+  const desktop = Object.hasOwn(window, "__CWU_DESKTOP_ACCESS_TOKEN");
+
   const state = {
     initialized: true,
     screen: "login",
-    accessToken: localStorage.getItem("cwu_access_token") || null,
-    refreshToken: localStorage.getItem("cwu_refresh_token") || null,
+    accessToken: desktop ? window.__CWU_DESKTOP_ACCESS_TOKEN : localStorage.getItem("cwu_access_token"),
+    refreshToken: desktop ? null : localStorage.getItem("cwu_refresh_token"),
     user: null,
     projects: [],
     activeProjectId: null,
@@ -22,6 +39,17 @@
     aclMembers: [],
     aclList: [],
     addAccountModal: null,
+    asmScope: "project",
+    asmProvider: "claude_code",
+    asmSubTab: "agents",
+    asmRawMode: false,
+    asmAgents: [],
+    asmSkills: [],
+    asmMcpConfig: null,
+    asmPresets: [],
+    asmSelectedAgent: null,
+    asmSelectedSkill: null,
+    asmGraphifyResult: null,
     ptySocket: null,
     ptyTerminal: null,
     projectTab: "chat",
@@ -49,6 +77,17 @@
   };
 
   const app = document.getElementById("app");
+
+  if (desktop) {
+    window.addEventListener("cwu:desktop-token", () => {
+      state.accessToken = window.__CWU_DESKTOP_ACCESS_TOKEN;
+      if (state.user) {
+        connectChatStream(state.activeProjectId);
+      } else {
+        boot();
+      }
+    });
+  }
 
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -88,8 +127,10 @@
     state.accessToken = auth.access_token;
     state.refreshToken = auth.refresh_token;
     state.user = auth.user;
-    localStorage.setItem("cwu_access_token", auth.access_token);
-    localStorage.setItem("cwu_refresh_token", auth.refresh_token);
+    if (!desktop) {
+      localStorage.setItem("cwu_access_token", auth.access_token);
+      localStorage.setItem("cwu_refresh_token", auth.refresh_token);
+    }
   }
 
   function clearSession() {
@@ -218,6 +259,14 @@
       state.activeProjectId = state.projects[0].id;
     }
     await loadProjectCli();
+    try {
+      state.asmPresets = await api("/api/mcp/presets");
+    } catch {
+      state.asmPresets = [];
+    }
+    if (state.tab === "agents_skills_mcp") {
+      await loadAsmData();
+    }
     if (state.user.role === "admin") {
       state.adminUsers = await api("/api/admin/users");
       state.adminInvites = await api("/api/admin/invites");
@@ -947,6 +996,8 @@
       `;
     } else if (state.tab === "accounts" && isAdmin) {
       mainHtml = renderAccountsTab();
+    } else if (state.tab === "agents_skills_mcp") {
+      mainHtml = renderAgentsSkillsMcpTab();
     } else if (!activeProject) {
       mainHtml = `
         <section class="panel-card">
@@ -1067,6 +1118,10 @@
           <div class="sidebar-section">
             <h3>Projects</h3>
             <ul class="project-list">${projectItems || "<li class='subtitle'>No assigned projects</li>"}</ul>
+          </div>
+          <div class="sidebar-section">
+            <h3>Workspace</h3>
+            <button class="nav-item ${state.tab === "agents_skills_mcp" ? "active" : ""}" id="nav-asm">Agents, Skills &amp; MCP</button>
           </div>
           ${isAdmin ? `
             <div class="sidebar-section">
@@ -1319,6 +1374,243 @@
     attachPtyTerminal("project-xterm-host", "project-xterm-fallback", "project-xterm-fallback-form", "project-xterm-fallback-input", wsPath);
   }
 
+  function asmBasePath() {
+    if (state.asmScope === "global") return "/api/global";
+    if (!state.activeProjectId) return null;
+    return `/api/projects/${state.activeProjectId}`;
+  }
+
+  function asmCanMutate() {
+    if (!state.user) return false;
+    if (state.asmScope === "global") return state.user.role === "admin";
+    return state.user.role !== "viewer" && Boolean(state.activeProjectId);
+  }
+
+  async function loadAsmData() {
+    const base = asmBasePath();
+    if (!base) {
+      state.asmAgents = [];
+      state.asmSkills = [];
+      state.asmMcpConfig = null;
+      return;
+    }
+    const prov = state.asmProvider;
+    try {
+      const [agents, skills, mcpCfg] = await Promise.all([
+        api(`${base}/agents/${prov}`),
+        api(`${base}/skills/${prov}`),
+        api(`${base}/mcp/${prov}`),
+      ]);
+      state.asmAgents = agents || [];
+      state.asmSkills = skills || [];
+      state.asmMcpConfig = mcpCfg || null;
+    } catch (err) {
+      state.error = err.message;
+    }
+  }
+
+  function renderAgentsSkillsMcpTab() {
+    const canEdit = asmCanMutate();
+    const readOnlyAttr = canEdit ? "" : "disabled";
+    const provTabs = Object.entries(PROVIDER_LABELS).map(([k, label]) => `
+      <button class="btn-secondary ${state.asmProvider === k ? "active" : ""}" data-asm-prov="${esc(k)}" type="button">${esc(label)}</button>
+    `).join("");
+
+    let bodyHtml = "";
+    if (state.asmScope === "project" && !state.activeProjectId) {
+      bodyHtml = `<div class="panel-card"><p class="subtitle">Select a project from the sidebar or switch to Global Scope.</p></div>`;
+    } else if (state.asmSubTab === "agents") {
+      const sel = state.asmSelectedAgent || {
+        name: "",
+        description: "",
+        model: PROVIDER_MODEL_TIERS[state.asmProvider][0],
+        tools: ["Read", "Grep"],
+        disallowed_tools: [],
+        permission_mode: "default",
+        system_prompt: "",
+        raw_markdown: "---\nname: \ndescription: \nmodel: " + PROVIDER_MODEL_TIERS[state.asmProvider][0] + "\n---\n",
+      };
+      const agentRows = state.asmAgents.map((a) => `
+        <div class="row">
+          <div>
+            <strong>${esc(a.name)}</strong>
+            <span class="role-badge">${esc(a.model || "inherit")}</span>
+            <p class="subtitle">${esc(a.description || "")}</p>
+          </div>
+          <div class="btn-group">
+            <button class="btn-secondary" data-asm-edit-agent="${esc(a.name)}" type="button">Edit</button>
+            ${canEdit ? `<button class="btn-danger" data-asm-del-agent="${esc(a.name)}" type="button">Delete</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      const modelOptions = PROVIDER_MODEL_TIERS[state.asmProvider].map((m) =>
+        `<option value="${esc(m)}" ${sel.model === m ? "selected" : ""}>${esc(m)}</option>`
+      ).join("");
+      const permOptions = PERMISSION_MODES.map((m) =>
+        `<option value="${esc(m)}" ${sel.permission_mode === m ? "selected" : ""}>${esc(m)}</option>`
+      ).join("");
+      const toolChecks = CLAUDE_TOOLS.map((t) => {
+        const chk = (sel.tools || []).includes(t) ? "checked" : "";
+        return `<label class="checkbox-item"><input type="checkbox" name="asm_tools" value="${esc(t)}" ${chk} ${readOnlyAttr} /> ${esc(t)}</label>`;
+      }).join("");
+
+      const editorFields = state.asmRawMode
+        ? `
+          <div class="form-group">
+            <label>Raw Markdown + YAML Frontmatter</label>
+            <textarea id="asm-agent-raw" name="raw_markdown" rows="12" ${readOnlyAttr}>${esc(sel.raw_markdown || "")}</textarea>
+          </div>`
+        : `
+          <div class="form-group"><label>Description</label><input id="asm-agent-desc" value="${esc(sel.description || "")}" ${readOnlyAttr} /></div>
+          <div class="form-group"><label>Model Tier</label><select id="asm-agent-model" ${readOnlyAttr}>${modelOptions}</select></div>
+          <div class="form-group"><label>Allowed Tools</label><div class="checkbox-list">${toolChecks}</div></div>
+          <div class="form-group"><label>Disallowed Tools (comma-separated)</label><input id="asm-agent-disallowed" value="${esc((sel.disallowed_tools || []).join(", "))}" ${readOnlyAttr} /></div>
+          <div class="form-group"><label>Permission Mode</label><select id="asm-agent-perm" ${readOnlyAttr}>${permOptions}</select></div>
+          <div class="form-group"><label>System Prompt</label><textarea id="asm-agent-prompt" rows="6" ${readOnlyAttr}>${esc(sel.system_prompt || "")}</textarea></div>`;
+
+      bodyHtml = `
+        <div class="admin-grid">
+          <div class="panel-card">
+            <h3>Configured Subagents (${esc(PROVIDER_LABELS[state.asmProvider])})</h3>
+            ${agentRows || "<p class='subtitle'>No subagents found in this scope.</p>"}
+          </div>
+          <form class="panel-card" id="asm-agent-form">
+            <div class="panel-header-row">
+              <h3>Subagent Editor</h3>
+              <button class="btn-secondary" id="asm-toggle-raw-btn" type="button">${state.asmRawMode ? "Visual Form" : "Raw YAML / Markdown"}</button>
+            </div>
+            <div class="form-group"><label>Agent Name</label><input id="asm-agent-name" value="${esc(sel.name || "")}" required ${readOnlyAttr} /></div>
+            ${editorFields}
+            ${canEdit ? `<button class="btn-primary" type="submit">Save Subagent</button>` : `<p class="subtitle">Read-only access in this scope.</p>`}
+          </form>
+        </div>`;
+    } else if (state.asmSubTab === "skills") {
+      const sel = state.asmSelectedSkill || {
+        name: "",
+        skill_md: "---\nname: \ndescription: \n---\n# Instructions\n",
+        companion_files: [],
+        is_shared: false,
+      };
+      const skillRows = state.asmSkills.map((s) => `
+        <div class="row">
+          <div>
+            <strong>${esc(s.name)}</strong>
+            ${s.is_shared ? `<span class="role-badge">Shared</span>` : ""}
+            <p class="subtitle">${esc(s.description || "")}</p>
+          </div>
+          <div class="btn-group">
+            <button class="btn-secondary" data-asm-edit-skill="${esc(s.name)}" type="button">Edit</button>
+            ${canEdit ? `<button class="btn-secondary" data-asm-share-skill="${esc(s.name)}" data-shared="${s.is_shared ? "true" : "false"}" type="button">${s.is_shared ? "Unshare" : "Share"}</button>` : ""}
+            ${canEdit ? `<button class="btn-danger" data-asm-del-skill="${esc(s.name)}" type="button">Delete</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      const compRows = (sel.companion_files || []).map((c) => `
+        <div class="row">
+          <code>${esc(c.relative_path)}</code>
+          ${canEdit && sel.name ? `<button class="btn-danger" data-asm-del-comp="${esc(c.relative_path)}" type="button">Remove</button>` : ""}
+        </div>
+      `).join("");
+
+      bodyHtml = `
+        <div class="admin-grid">
+          <div class="panel-card">
+            <h3>Skills (${esc(PROVIDER_LABELS[state.asmProvider])})</h3>
+            ${skillRows || "<p class='subtitle'>No skills found in this scope.</p>"}
+          </div>
+          <div class="panel-card">
+            <form id="asm-skill-form">
+              <h3>Skill &amp; Companion Editor</h3>
+              <div class="form-group"><label>Skill Name</label><input id="asm-skill-name" value="${esc(sel.name || "")}" required ${readOnlyAttr} /></div>
+              <label class="checkbox-item" style="margin-bottom: 10px;">
+                <input type="checkbox" id="asm-skill-share-toggle" ${sel.is_shared ? "checked" : ""} ${readOnlyAttr} />
+                Share Skill across CLIs
+              </label>
+              <div class="form-group"><label>SKILL.md</label><textarea id="asm-skill-md" rows="8" ${readOnlyAttr}>${esc(sel.skill_md || "")}</textarea></div>
+              ${canEdit ? `<button class="btn-primary" type="submit">Save Skill</button>` : ""}
+            </form>
+            <div style="margin-top: 16px;">
+              <h4>Companion Files (scripts/, references/, examples/)</h4>
+              ${compRows || "<p class='subtitle'>No companion files yet.</p>"}
+              ${canEdit ? `
+                <form id="asm-comp-form" style="margin-top: 10px;">
+                  <div class="form-group"><label>Relative Path</label><input id="asm-comp-path" value="scripts/helper.sh" required /></div>
+                  <div class="form-group"><label>Content</label><textarea id="asm-comp-content" rows="4"></textarea></div>
+                  <button class="btn-secondary" type="submit">Save Companion File</button>
+                </form>` : ""}
+            </div>
+          </div>
+        </div>`;
+    } else {
+      const cfg = state.asmMcpConfig || { config_path: "", servers: [] };
+      const srvRows = (cfg.servers || []).map((s) => `
+        <div class="row">
+          <div>
+            <strong>${esc(s.name)}</strong>
+            <div class="project-path"><code>${esc(s.command || s.url || "")} ${esc((s.args || []).join(" "))}</code></div>
+          </div>
+          <div class="btn-group">
+            ${canEdit ? `<button class="btn-secondary" data-asm-sync-mcp="${esc(s.name)}" type="button">Sync across CLIs</button>` : ""}
+            ${canEdit ? `<button class="btn-danger" data-asm-del-mcp="${esc(s.name)}" type="button">Delete</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      const presetButtons = (state.asmPresets.length > 0 ? state.asmPresets : [
+        { id: "graphify-mcp", display_name: "Graphify Knowledge Graph (graphify-mcp)" },
+        { id: "chrome-devtools", display_name: "Chrome DevTools MCP" },
+        { id: "playwright", display_name: "Playwright Browser MCP" },
+      ]).map((p) => `
+        <button class="btn-secondary" data-asm-preset="${esc(p.id)}" type="button" ${readOnlyAttr}>+ ${esc(p.display_name)}</button>
+      `).join("");
+
+      bodyHtml = `
+        <div class="admin-grid">
+          <div class="panel-card">
+            <div class="panel-header-row">
+              <h3>Native MCP Servers</h3>
+              ${state.asmScope === "project" && canEdit ? `<button class="btn-secondary" id="asm-run-graphify-btn" type="button">Run Graphify Index</button>` : ""}
+            </div>
+            <p class="project-path">${esc(cfg.config_path || "")}</p>
+            ${srvRows || "<p class='subtitle'>No MCP servers configured yet.</p>"}
+            <h4 style="margin-top: 14px;">One-Click Presets</h4>
+            <div class="btn-group">${presetButtons}</div>
+            ${state.asmGraphifyResult ? `<pre class="xterm-fallback-log" style="margin-top: 12px;">${esc(state.asmGraphifyResult)}</pre>` : ""}
+          </div>
+          <form class="panel-card" id="asm-mcp-form">
+            <h3>Add / Update MCP Server</h3>
+            <div class="form-group"><label>Server Name</label><input id="asm-mcp-name" placeholder="my-mcp" required ${readOnlyAttr} /></div>
+            <div class="form-group"><label>Command</label><input id="asm-mcp-cmd" placeholder="npx" ${readOnlyAttr} /></div>
+            <div class="form-group"><label>Args (space-separated)</label><input id="asm-mcp-args" placeholder="-y @playwright/mcp@latest" ${readOnlyAttr} /></div>
+            ${canEdit ? `<button class="btn-primary" type="submit">Save MCP Server</button>` : ""}
+          </form>
+        </div>`;
+    }
+
+    return `
+      <section class="panel-card">
+        <div class="panel-header-row">
+          <div>
+            <h2>Agents, Skills &amp; MCP Manager</h2>
+            <p class="subtitle">Native CLI subagents, skills with cross-CLI symlink sharing, and MCP presets.</p>
+          </div>
+          <div class="tab-bar">
+            <button class="btn-secondary ${state.asmScope === "project" ? "active" : ""}" data-asm-scope="project" type="button">Project Scope</button>
+            <button class="btn-secondary ${state.asmScope === "global" ? "active" : ""}" data-asm-scope="global" type="button">Global Scope</button>
+          </div>
+        </div>
+        <div class="tab-bar">${provTabs}</div>
+        <div class="tab-bar">
+          <button class="btn-secondary ${state.asmSubTab === "agents" ? "active" : ""}" data-asm-sub="agents" type="button">Subagents</button>
+          <button class="btn-secondary ${state.asmSubTab === "skills" ? "active" : ""}" data-asm-sub="skills" type="button">Skills</button>
+          <button class="btn-secondary ${state.asmSubTab === "mcp" ? "active" : ""}" data-asm-sub="mcp" type="button">MCP Servers</button>
+        </div>
+      </section>
+      ${bodyHtml}`;
+  }
+
   function bindDashboardHandlers() {
     bindKanbanHandlers();
     document.querySelectorAll("[data-pid]").forEach((btn) => {
@@ -1364,6 +1656,16 @@
       searchInp.onchange = async () => {
         state.sessionSearch = searchInp.value;
         await loadProjectSessions();
+        render();
+      };
+    }
+
+    const navAsm = document.getElementById("nav-asm");
+    if (navAsm) {
+      navAsm.onclick = async () => {
+        state.tab = "agents_skills_mcp";
+        state.error = null; state.notice = null;
+        await loadAsmData();
         render();
       };
     }
@@ -1796,6 +2098,273 @@
         } catch (err) { state.error = err.message; render(); }
       };
     });
+
+    document.querySelectorAll("[data-asm-scope]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.asmScope = btn.dataset.asmScope;
+        state.asmSelectedAgent = null;
+        state.asmSelectedSkill = null;
+        await loadAsmData();
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-prov]").forEach((btn) => {
+      btn.onclick = async () => {
+        state.asmProvider = btn.dataset.asmProv;
+        state.asmSelectedAgent = null;
+        state.asmSelectedSkill = null;
+        await loadAsmData();
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-sub]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSubTab = btn.dataset.asmSub;
+        render();
+      };
+    });
+
+    const toggleRawBtn = document.getElementById("asm-toggle-raw-btn");
+    if (toggleRawBtn) {
+      toggleRawBtn.onclick = () => {
+        state.asmRawMode = !state.asmRawMode;
+        render();
+      };
+    }
+
+    document.querySelectorAll("[data-asm-edit-agent]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSelectedAgent = state.asmAgents.find((a) => a.name === btn.dataset.asmEditAgent) || null;
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-agent]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/agents/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelAgent)}`, { method: "DELETE" });
+          state.asmSelectedAgent = null;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmAgentForm = document.getElementById("asm-agent-form");
+    if (asmAgentForm) {
+      asmAgentForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        state.error = null; state.notice = null;
+        const name = document.getElementById("asm-agent-name").value.trim();
+        const payload = state.asmRawMode
+          ? { name, raw_markdown: document.getElementById("asm-agent-raw").value }
+          : {
+              name,
+              description: document.getElementById("asm-agent-desc").value,
+              model: document.getElementById("asm-agent-model").value,
+              tools: Array.from(document.querySelectorAll('input[name="asm_tools"]:checked')).map((el) => el.value),
+              disallowed_tools: document.getElementById("asm-agent-disallowed").value.split(",").map((s) => s.trim()).filter(Boolean),
+              permission_mode: document.getElementById("asm-agent-perm").value,
+              system_prompt: document.getElementById("asm-agent-prompt").value,
+            };
+        try {
+          const saved = await api(`${base}/agents/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          state.asmSelectedAgent = saved;
+          state.notice = `Saved subagent '${saved.name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-asm-edit-skill]").forEach((btn) => {
+      btn.onclick = () => {
+        state.asmSelectedSkill = state.asmSkills.find((s) => s.name === btn.dataset.asmEditSkill) || null;
+        render();
+      };
+    });
+
+    document.querySelectorAll("[data-asm-share-skill]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        const nextShared = btn.dataset.shared !== "true";
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmShareSkill)}/share`, {
+            method: "PUT",
+            body: JSON.stringify({ shared: nextShared }),
+          });
+          state.asmSelectedSkill = updated;
+          state.notice = nextShared ? "Skill shared across CLIs." : "Cross-CLI skill links removed.";
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-skill]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelSkill)}`, { method: "DELETE" });
+          state.asmSelectedSkill = null;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmSkillForm = document.getElementById("asm-skill-form");
+    if (asmSkillForm) {
+      asmSkillForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        const name = document.getElementById("asm-skill-name").value.trim();
+        const skill_md = document.getElementById("asm-skill-md").value;
+        const wantShare = document.getElementById("asm-skill-share-toggle").checked;
+        try {
+          let saved = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, skill_md, companion_files: [] }),
+          });
+          if (saved.is_shared !== wantShare) {
+            saved = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(name)}/share`, {
+              method: "PUT",
+              body: JSON.stringify({ shared: wantShare }),
+            });
+          }
+          state.asmSelectedSkill = saved;
+          state.notice = `Saved skill '${saved.name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const asmCompForm = document.getElementById("asm-comp-form");
+    if (asmCompForm) {
+      asmCompForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        const skillName = document.getElementById("asm-skill-name")?.value?.trim();
+        if (!base || !skillName) return;
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(skillName)}/files`, {
+            method: "PUT",
+            body: JSON.stringify({
+              relative_path: document.getElementById("asm-comp-path").value.trim(),
+              content: document.getElementById("asm-comp-content").value,
+            }),
+          });
+          state.asmSelectedSkill = updated;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    document.querySelectorAll("[data-asm-del-comp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        const skillName = state.asmSelectedSkill?.name;
+        if (!base || !skillName) return;
+        try {
+          const updated = await api(`${base}/skills/${state.asmProvider}/${encodeURIComponent(skillName)}/files?path=${encodeURIComponent(btn.dataset.asmDelComp)}`, {
+            method: "DELETE",
+          });
+          state.asmSelectedSkill = updated;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-preset]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/presets/${encodeURIComponent(btn.dataset.asmPreset)}`, { method: "POST" });
+          state.notice = `Applied preset ${btn.dataset.asmPreset}.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-sync-mcp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmSyncMcp)}/sync`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          state.notice = `Synced '${btn.dataset.asmSyncMcp}' across all CLIs.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    document.querySelectorAll("[data-asm-del-mcp]").forEach((btn) => {
+      btn.onclick = async () => {
+        const base = asmBasePath();
+        if (!base) return;
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(btn.dataset.asmDelMcp)}`, { method: "DELETE" });
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    });
+
+    const asmMcpForm = document.getElementById("asm-mcp-form");
+    if (asmMcpForm) {
+      asmMcpForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const base = asmBasePath();
+        if (!base) return;
+        const name = document.getElementById("asm-mcp-name").value.trim();
+        const command = document.getElementById("asm-mcp-cmd").value.trim() || null;
+        const args = document.getElementById("asm-mcp-args").value.split(/\s+/).filter(Boolean);
+        try {
+          await api(`${base}/mcp/${state.asmProvider}/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: JSON.stringify({ name, command, args, env: {}, url: null, disabled: false }),
+          });
+          state.notice = `Saved MCP server '${name}'.`;
+          await loadAsmData();
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
+
+    const graphifyBtn = document.getElementById("asm-run-graphify-btn");
+    if (graphifyBtn) {
+      graphifyBtn.onclick = async () => {
+        if (!state.activeProjectId) return;
+        state.error = null; state.notice = null;
+        try {
+          const res = await api(`/api/projects/${state.activeProjectId}/mcp/graphify/index`, { method: "POST" });
+          state.asmGraphifyResult = `${res.status}: ${res.graph_path}\n${res.output}`;
+          state.notice = "Graphify indexing finished.";
+          render();
+        } catch (err) { state.error = err.message; render(); }
+      };
+    }
   }
 
   setInterval(() => { if (state.projectTab === "kanban" && state.user && !kanban.editing && !document.querySelector(".kanban-card:active")) void loadKanban().catch(() => {}); }, 1500);
