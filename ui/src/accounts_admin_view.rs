@@ -180,6 +180,22 @@ pub fn AccountsAdminWorkspace(state: AccountsAdminState) -> impl IntoView {
     }
 }
 
+thread_local! {
+    // Whether the dashboard's PTY session is live. The dashboard script flips it,
+    // so the launch button can read "Restart terminal" without remounting the
+    // modal (a remount would dispose the terminal).
+    static OAUTH_TERMINAL_LIVE: RwSignal<bool> = RwSignal::new(false);
+}
+
+/// Called by the dashboard script when the PTY session starts or ends.
+pub fn set_oauth_terminal_live(live: bool) {
+    OAUTH_TERMINAL_LIVE.with(|signal| signal.set(live));
+}
+
+pub fn launch_button_label(live: bool) -> &'static str {
+    if live { "Restart terminal" } else { "Launch OAuth Terminal" }
+}
+
 #[component]
 pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
     if modal.step == "create" {
@@ -265,7 +281,9 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
     } else {
         view! {
             <div class="btn-group" style="margin-bottom: 10px;">
-                <button class="btn-secondary" id="launch-oauth-pty-btn" type="button">"Launch OAuth Terminal"</button>
+                <button class="btn-secondary" id="launch-oauth-pty-btn" type="button">
+                    {move || launch_button_label(OAUTH_TERMINAL_LIVE.with(|live| live.get()))}
+                </button>
             </div>
             <div id="oauth-xterm-host" class="xterm-container">
                 <pre id="oauth-xterm-fallback" class="xterm-fallback-log">

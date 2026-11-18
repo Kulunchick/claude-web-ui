@@ -960,6 +960,9 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert!(js.contains("leptos.mount_cli_switcher"));
     assert!(js.contains("cwu:switch-project-cli"));
     assert!(js.contains("/login-pty"));
+    // The shared attach routine focuses the terminal and reports liveness to the view.
+    assert!(js.contains("term.focus()"));
+    assert!(js.contains("set_oauth_terminal_live"));
     assert!(js.contains("/credentials"));
     assert!(js.contains("leptos.mount_accounts_admin"));
     assert!(js.contains("leptos.mount_account_modal"));
@@ -980,5 +983,6 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     let wasm = String::from_utf8_lossy(&wasm_bytes);
     assert!(wasm.contains("+ Add Account"));
     assert!(wasm.contains("Launch OAuth Terminal"));
+    assert!(wasm.contains("Restart terminal"));
     assert!(wasm.contains("oauth-xterm-host"));
 }
