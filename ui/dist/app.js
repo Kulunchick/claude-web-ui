@@ -926,6 +926,10 @@
       mainHtml = '<div id="admin-workspace"></div>';
     } else if (screen === "accounts") {
       mainHtml = '<div id="accounts-workspace"></div>';
+      setPageHeader({
+        count: state.adminAccounts.length,
+        actions: '<button class="btn btn-sm" id="open-add-account-btn" type="button">+ Add Account</button>',
+      });
     } else if (screen === "agents_skills_mcp") {
       mainHtml = '<div id="asm-workspace"></div>';
     } else if (screen === "none") {

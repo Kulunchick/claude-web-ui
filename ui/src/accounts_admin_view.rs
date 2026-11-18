@@ -72,18 +72,26 @@ pub fn AccountsAdminWorkspace(state: AccountsAdminState) -> impl IntoView {
             } else {
                 format!("Credentials: {}", acc.credential_files.join(", "))
             };
+            let (status_class, status_label) = if acc.credential_files.is_empty() {
+                ("badge badge-warning", "Not authenticated")
+            } else {
+                ("badge badge-success", "Authenticated")
+            };
             view! {
                 <article class="panel-card account-card">
                     <div class="panel-header-row">
-                        <strong>{acc.name.clone()}</strong>
-                        <span class="role-badge">{acc.provider.display_name()}</span>
+                        <h3 class="account-card-title truncate">{acc.name.clone()}</h3>
+                        <div class="account-badges">
+                            <span class="badge badge-outline">{acc.provider.display_name()}</span>
+                            <span class=status_class>{status_label}</span>
+                        </div>
                     </div>
-                    <p class="project-path">{acc.profile_dir.clone()}</p>
-                    <p class="subtitle">{creds}</p>
+                    <p class="project-path account-card-path">{acc.profile_dir.clone()}</p>
+                    <p class="subtitle account-card-creds">{creds}</p>
                     <div class="btn-group">
-                        <button class="btn-secondary" data-auth-acc=acc.id.clone()>"OAuth / Credentials"</button>
-                        <button class="btn-secondary" data-rename-acc=acc.id.clone()>"Rename"</button>
-                        <button class="btn-danger" data-del-acc=acc.id.clone()>"Delete"</button>
+                        <button class="btn-secondary btn-sm" data-auth-acc=acc.id.clone()>"OAuth / Credentials"</button>
+                        <button class="btn-secondary btn-sm" data-rename-acc=acc.id.clone()>"Rename"</button>
+                        <button class="btn-danger btn-sm" data-del-acc=acc.id.clone()>"Delete"</button>
                     </div>
                 </article>
             }
@@ -133,9 +141,9 @@ pub fn AccountsAdminWorkspace(state: AccountsAdminState) -> impl IntoView {
                 })
                 .collect_view();
             view! {
-                <div class="panel-card">
-                    <div class="panel-header-row">
-                        <strong>{m.username.clone()}</strong>
+                <div class="list-row acl-row">
+                    <div class="acl-row-head">
+                        <strong class="acl-row-name">{m.username.clone()}</strong>
                         <label class="checkbox-item">
                             <input type="checkbox" data-acl-unrestricted=m.user_id.clone() checked=!acl.restricted />
                             " Unrestricted (All Accounts)"
@@ -145,37 +153,33 @@ pub fn AccountsAdminWorkspace(state: AccountsAdminState) -> impl IntoView {
                         {checkboxes}
                         {(!has_accounts).then(|| view! { <span class="subtitle">"No CLI accounts created yet."</span> })}
                     </div>
-                    <button class="btn-secondary" data-save-acl=m.user_id.clone()>"Save ACL"</button>
+                    <button class="btn-secondary btn-sm" data-save-acl=m.user_id.clone()>"Save ACL"</button>
                 </div>
             }
         })
         .collect_view();
 
     view! {
-        <section class="panel-card" data-view="cli-accounts">
-            <div class="panel-header-row">
-                <div>
-                    <h2>"CLI Accounts & OAuth Profiles"</h2>
-                    <p class="subtitle">"Isolated credentials per account with shared provider sessions & skills."</p>
-                </div>
-                <button class="btn-primary" id="open-add-account-btn" type="button">"+ Add Account"</button>
-            </div>
-            <div class="admin-grid">
+        <section class="accounts-page" data-view="cli-accounts">
+            <p class="subtitle">"Isolated credentials per account with shared provider sessions & skills. Use \"+ Add Account\" in the page header to create one."</p>
+            <div class="admin-grid accounts-grid">
                 {cards}
                 {(!has_accounts).then(|| view! { <p class="subtitle">"No CLI accounts yet."</p> })}
             </div>
-        </section>
-        <section class="panel-card">
-            <h3>"Developer Account ACLs"</h3>
-            <div class="form-group">
-                <label>"Project"</label>
-                <select id="acl-project-select">
-                    {project_options}
-                    {(!has_projects).then(|| view! { <option value="">"No projects"</option> })}
-                </select>
-            </div>
-            {acl_rows}
-            {(!has_developers).then(|| view! { <p class="subtitle">"No Developer members assigned to this project."</p> })}
+            <section class="panel-card acl-card">
+                <div class="panel-header-row">
+                    <h3>"Developer Account ACLs"</h3>
+                </div>
+                <div class="form-group">
+                    <label>"Project"</label>
+                    <select id="acl-project-select">
+                        {project_options}
+                        {(!has_projects).then(|| view! { <option value="">"No projects"</option> })}
+                    </select>
+                </div>
+                <div class="acl-list">{acl_rows}</div>
+                {(!has_developers).then(|| view! { <p class="subtitle">"No Developer members assigned to this project."</p> })}
+            </section>
         </section>
     }
 }
@@ -204,7 +208,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
                 <div class="modal-card">
                     <div class="panel-header-row">
                         <h3>"Add Account"</h3>
-                        <button class="btn-secondary" id="close-account-modal" type="button">"Close"</button>
+                        <button class="btn-secondary btn-sm" id="close-account-modal" type="button">"Close"</button>
                     </div>
                     <form id="create-account-form">
                         <div class="form-group">
@@ -219,7 +223,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
                             <label>"Account Name"</label>
                             <input name="name" placeholder="e.g. Work, Personal" required />
                         </div>
-                        <button class="btn-primary" type="submit">"Create Profile & Authenticate"</button>
+                        <button class="btn-primary btn-block" type="submit">"Create Profile & Authenticate"</button>
                     </form>
                 </div>
             </div>
@@ -234,9 +238,9 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
     let credentials_tab = modal.tab == "credentials";
     let tab_class = |active: bool| {
         if active {
-            "btn-secondary active"
+            "tab active"
         } else {
-            "btn-secondary"
+            "tab"
         }
     };
 
@@ -250,7 +254,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
                 view! {
                     <div class="row">
                         <code>{f.clone()}</code>
-                        <button class="btn-danger" data-del-cred=f type="button">"Delete"</button>
+                        <button class="btn-danger btn-sm" data-del-cred=f type="button">"Delete"</button>
                     </div>
                 }
             })
@@ -271,7 +275,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
                 </div>
                 <button class="btn-primary" type="submit">"Save Credential File"</button>
             </form>
-            <div style="margin-top: 14px;">
+            <div class="cred-files">
                 <h4>"Stored Credential Files"</h4>
                 {files}
                 {(!has_files).then(|| view! { <p class="subtitle">"No credential files uploaded yet."</p> })}
@@ -280,7 +284,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
         .into_any()
     } else {
         view! {
-            <div class="btn-group" style="margin-bottom: 10px;">
+            <div class="btn-group oauth-toolbar">
                 <button class="btn-secondary" id="launch-oauth-pty-btn" type="button">
                     {move || launch_button_label(OAUTH_TERMINAL_LIVE.with(|live| live.get()))}
                 </button>
@@ -289,7 +293,7 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
                 <pre id="oauth-xterm-fallback" class="xterm-fallback-log">
                     {format!("Click \"Launch OAuth Terminal\" to start {provider} login...")}
                 </pre>
-                <form id="oauth-fallback-input-form" style="display:none; gap:8px;">
+                <form id="oauth-fallback-input-form" class="oauth-fallback-form" style="display:none;">
                     <input id="oauth-fallback-input" placeholder="Paste OAuth code and press Enter..." />
                     <button class="btn-secondary" type="submit">"Send"</button>
                 </form>
@@ -302,14 +306,14 @@ pub fn AccountAuthModal(modal: AccountModalState) -> impl IntoView {
         <div class="modal-backdrop">
             <div class="modal-card">
                 <div class="panel-header-row">
-                    <div>
+                    <div class="modal-title-group">
                         <h3>{format!("Authenticate: {}", acc.name)}</h3>
-                        <span class="role-badge">{provider}</span>
+                        <span class="badge badge-outline">{provider}</span>
                     </div>
-                    <button class="btn-secondary" id="close-account-modal" type="button">"Close"</button>
+                    <button class="btn-secondary btn-sm" id="close-account-modal" type="button">"Close"</button>
                 </div>
-                <div class="tab-bar">
-                    <button class=tab_class(!credentials_tab) id="modal-tab-pty" type="button">"OAuth Terminal (xterm.js)"</button>
+                <div class="tabs">
+                    <button class=tab_class(!credentials_tab) id="modal-tab-pty" type="button">"OAuth Terminal"</button>
                     <button class=tab_class(credentials_tab) id="modal-tab-creds" type="button">"Upload / Paste Credentials"</button>
                 </div>
                 {body}

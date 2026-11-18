@@ -1661,6 +1661,96 @@ input[type="checkbox"].switch:checked::before {
   gap: var(--space-4);
 }
 
+.accounts-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.accounts-page > .subtitle { margin: 0; }
+
+.account-card { min-width: 0; }
+
+.account-card-title { min-width: 0; }
+
+.account-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.account-card-path {
+  margin: 0 0 var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.account-card-creds { margin: 0 0 var(--space-3); }
+
+.acl-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.acl-row {
+  cursor: default;
+  border: 1px solid var(--border-faint);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.acl-row-head {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.acl-row-name { color: var(--text-primary); }
+
+.acl-row .checkbox-list { margin: 0; }
+
+/* Authenticate modal */
+.modal-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.oauth-toolbar { margin-bottom: var(--space-3); }
+
+.oauth-fallback-form {
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.cred-files { margin-top: var(--space-4); }
+
+.cred-files h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-tab);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.cred-files .row { min-width: 0; }
+
+.cred-files code { overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .admin-grid { grid-template-columns: minmax(0, 1fr); }
+  .account-card .panel-header-row { flex-wrap: wrap; }
+}
+
 /* ---------- Screen: chat & terminal ---------------------------------------
    section.chat-workspace > .chat-main (head, feed, composer, terminal)
                           + button.chat-rail-scrim + aside.chat-rail (search, sessions)
