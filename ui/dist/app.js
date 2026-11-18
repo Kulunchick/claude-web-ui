@@ -94,11 +94,25 @@
     try { if (leptos && leptos.set_oauth_terminal_live) leptos.set_oauth_terminal_live(live); } catch {}
   }
 
+  // Teardown callbacks for the live PTY (ResizeObserver, host listeners, ...).
+  // Run by closeActivePty, which every render() and every (re)launch goes through.
+  let ptyCleanups = [];
+
   function closeActivePty() {
     setPtyLive(false);
+    const cleanups = ptyCleanups;
+    ptyCleanups = [];
+    for (const fn of cleanups) {
+      try { fn(); } catch {}
+    }
     if (state.ptySocket) {
-      try { state.ptySocket.close(); } catch {}
+      const ws = state.ptySocket;
       state.ptySocket = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch {}
     }
     if (state.ptyTerminal) {
       try { state.ptyTerminal.dispose(); } catch {}
@@ -730,39 +744,200 @@
     bindDashboardHandlers();
   }
 
+  // Terminal appearance, mirroring the hermes-agent dashboard terminal.
+  // xterm.js takes literal colors, so these hex values are the one deliberate exception
+  // to "no hard-coded colors". Keep every terminal color in this block.
+  const TERMINAL_COLORS = {
+    background: "#000000",
+    foreground: "#f0e6d2",
+    selectionAlpha: "44", // ~27% alpha, appended to the foreground hex
+  };
+  const TERMINAL_FONT_FACE = "JetBrains Mono"; // self-hosted, see @font-face in styles.css
+  const TERMINAL_FONT_FAMILY = `'${TERMINAL_FONT_FACE}', 'Cascadia Mono', 'Fira Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace`;
+  const TERMINAL_SCROLLBACK = 5000;
+  const TERMINAL_FONT_WAIT_MS = 2000;
+  const FALLBACK_PTY_COLS = 90;
+  const FALLBACK_PTY_ROWS = 24;
+
+  function terminalTheme() {
+    const { background, foreground, selectionAlpha } = TERMINAL_COLORS;
+    return {
+      background,
+      foreground,
+      cursor: foreground,
+      cursorAccent: background,
+      selectionBackground: `${foreground}${selectionAlpha}`,
+    };
+  }
+
+  // Width used to pick the font size step: the host's width, or the viewport while the host is not laid out yet.
+  function terminalTierWidth(host) {
+    const w = Math.round(host.clientWidth);
+    if (w > 2) return w;
+    const vv = window.visualViewport ? window.visualViewport.width : Infinity;
+    return Math.round(Math.min(window.innerWidth, vv, document.documentElement.clientWidth || Infinity));
+  }
+
+  function terminalFontSizeForWidth(w) {
+    if (w < 300) return 7;
+    if (w < 360) return 8;
+    if (w < 420) return 9;
+    if (w < 520) return 10;
+    if (w < 720) return 11;
+    if (w < 1024) return 12;
+    return 14;
+  }
+
+  function terminalLineHeightForWidth(w) {
+    return w < 1024 ? 1.02 : 1.15;
+  }
+
+  // Resolves once the terminal web font is usable (or after a timeout), so fit() measures the real cell size.
+  function whenTerminalFontReady() {
+    if (!document.fonts || typeof document.fonts.load !== "function") return Promise.resolve();
+    const load = Promise.all([
+      document.fonts.load(`400 1em '${TERMINAL_FONT_FACE}'`),
+      document.fonts.load(`700 1em '${TERMINAL_FONT_FACE}'`),
+    ]).catch(() => {});
+    const timeout = new Promise((resolve) => setTimeout(resolve, TERMINAL_FONT_WAIT_MS));
+    return Promise.race([load, timeout]);
+  }
+
   function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {
     closeActivePty();
     const host = document.getElementById(hostId);
     if (!host) return;
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let cols = 90;
-    let rows = 24;
-    let term = null;
     const fallbackLog = document.getElementById(fallbackLogId);
     const fallbackForm = document.getElementById(fallbackFormId);
 
-    if (typeof window.Terminal === "function") {
-      host.innerHTML = "";
-      term = new window.Terminal({ cols, rows, cursorBlink: true });
-      if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
-        term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+    if (typeof window.Terminal !== "function") {
+      if (fallbackLog && fallbackForm) {
+        fallbackLog.textContent = "Connecting to PTY...\n";
+        fallbackForm.style.display = "flex";
       }
-      term.open(host);
-      state.ptyTerminal = term;
-      term.focus();
-      host.addEventListener("click", () => term.focus());
-    } else if (fallbackLog && fallbackForm) {
-      fallbackLog.textContent = "Connecting to PTY...\n";
-      fallbackForm.style.display = "flex";
+      const ws = openPtySocket(wsPath, FALLBACK_PTY_COLS, FALLBACK_PTY_ROWS, null, fallbackLog);
+      if (fallbackForm) {
+        fallbackForm.onsubmit = (e) => {
+          e.preventDefault();
+          const inp = document.getElementById(fallbackInputId);
+          if (inp && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
+            inp.value = "";
+          }
+        };
+      }
+      return;
     }
 
-    const wsUrl = `${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`;
-    const ws = new WebSocket(wsUrl);
+    // xterm opens into an unpadded box filling the host, so the fit addon measures the real space.
+    host.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "xterm-fit-box";
+    host.appendChild(box);
+
+    const tierWidth = terminalTierWidth(host);
+    const term = new window.Terminal({
+      allowProposedApi: true, // required by the unicode11 addon
+      cursorBlink: true,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: terminalFontSizeForWidth(tierWidth),
+      lineHeight: terminalLineHeightForWidth(tierWidth),
+      letterSpacing: 0,
+      fontWeight: "400",
+      fontWeightBold: "700",
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      scrollback: TERMINAL_SCROLLBACK,
+      theme: terminalTheme(),
+    });
+    const fit = window.FitAddon && typeof window.FitAddon.FitAddon === "function"
+      ? new window.FitAddon.FitAddon()
+      : null;
+    if (fit) term.loadAddon(fit);
+    if (window.Unicode11Addon && typeof window.Unicode11Addon.Unicode11Addon === "function") {
+      term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
+      term.unicode.activeVersion = "11";
+    }
+    if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
+      term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+    }
+    term.open(box);
+    state.ptyTerminal = term;
+    term.focus();
+    setPtyLive(true);
+
+    const focusTerm = () => term.focus();
+    host.addEventListener("click", focusTerm);
+    ptyCleanups.push(() => host.removeEventListener("click", focusTerm));
+
+    // Re-pick font size/line height for the host width, then fit cols/rows to the host.
+    // term.onResize (below) forwards any grid change to the PTY as a `resize` frame.
+    const syncMetrics = () => {
+      if (state.ptyTerminal !== term) return;
+      // A hidden or detached host would make fit() collapse the grid to 1x1.
+      if (!host.isConnected || host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      const w = terminalTierWidth(host);
+      const fontSize = terminalFontSizeForWidth(w);
+      const lineHeight = terminalLineHeightForWidth(w);
+      if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
+      if (term.options.lineHeight !== lineHeight) term.options.lineHeight = lineHeight;
+      if (fit) {
+        try { fit.fit(); } catch {}
+      }
+    };
+
+    if (typeof ResizeObserver === "function") {
+      let frame = 0;
+      const observer = new ResizeObserver(() => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(syncMetrics);
+      });
+      observer.observe(host);
+      ptyCleanups.push(() => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+      });
+    }
+
+    let ws = null;
+    term.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+    term.onResize((sz) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
+      }
+    });
+
+    // Connect only once the web font is in, so the CLI's first frame is laid out for the measured size.
+    whenTerminalFontReady().then(() => {
+      if (state.ptyTerminal !== term) return; // disposed by render() or a restart while waiting
+      // open() measured the cell with a fallback face; changing the family forces xterm to re-measure.
+      term.options.fontFamily = "monospace";
+      term.options.fontFamily = TERMINAL_FONT_FAMILY;
+      if (typeof term.clearTextureAtlas === "function") term.clearTextureAtlas();
+      syncMetrics();
+      ws = openPtySocket(wsPath, term.cols, term.rows, term, null);
+    });
+  }
+
+  // Opens the PTY WebSocket at the given size and wires output to the terminal (or the fallback log).
+  function openPtySocket(wsPath, cols, rows, term, fallbackLog) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`);
     state.ptySocket = ws;
     setPtyLive(true);
     const markEnded = () => { if (state.ptySocket === ws) setPtyLive(false); };
     ws.onclose = markEnded;
     ws.onerror = markEnded;
+    ws.onopen = () => {
+      // The grid may have been re-fitted between connecting and opening.
+      if (term && (term.cols !== cols || term.rows !== rows)) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      }
+    };
 
     ws.onmessage = (ev) => {
       try {
@@ -782,28 +957,7 @@
         }
       } catch {}
     };
-
-    if (term) {
-      term.onData((data) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data }));
-        }
-      });
-      term.onResize((sz) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
-        }
-      });
-    } else if (fallbackForm) {
-      fallbackForm.onsubmit = (e) => {
-        e.preventDefault();
-        const inp = document.getElementById(fallbackInputId);
-        if (inp && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
-          inp.value = "";
-        }
-      };
-    }
+    return ws;
   }
 
   function connectOAuthTerminal(accountId) {

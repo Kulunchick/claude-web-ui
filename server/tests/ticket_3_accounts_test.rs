@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{header, Method, Request, StatusCode};
 use claude_web_ui_server::fakes::{FakeCliRunner, FakeMessengerTransport};
 use claude_web_ui_server::{GatewayConfig, GatewayServer};
 use claude_web_ui_shared::accounts::{
@@ -961,6 +961,58 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     let html = String::from_utf8_lossy(&html_bytes);
     assert!(html.contains("Claude Web UI"));
     assert!(html.contains("xterm"));
+    // The terminal fits its host and supports wide glyphs, pinned like the other xterm assets.
+    assert!(html.contains("@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"));
+    assert!(html.contains("@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"));
+
+    // JetBrains Mono is self-hosted from the embedded assets with its OFL license.
+    // Unknown paths fall back to index.html with 200, so the content type is what proves it.
+    let font_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(font_resp.status(), StatusCode::OK);
+    let font_type = font_resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(font_type, "font/woff2");
+    let font_bytes = font_resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(font_bytes.starts_with(b"wOF2"));
+
+    let license_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/fonts/jetbrains-mono/OFL.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(license_resp.status(), StatusCode::OK);
+    let license_bytes = license_resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&license_bytes).contains("SIL OPEN FONT LICENSE"));
+
+    let css_resp = h
+        .server
+        .router()
+        .oneshot(Request::builder().uri("/styles.css").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let css_bytes = css_resp.into_body().collect().await.unwrap().to_bytes();
+    let css = String::from_utf8_lossy(&css_bytes);
+    assert!(css.contains("/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2"));
 
     let js_resp = h
         .server
