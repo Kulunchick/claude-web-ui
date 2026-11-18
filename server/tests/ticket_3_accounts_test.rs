@@ -631,12 +631,17 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
         .await
         .expect("send resize");
         ws.send(WsMessage::Text(
-            json!({ "type": "input", "data": format!("oauth-code-{idx}\r") })
+            json!({ "type": "input", "data": format!("oauth-code-{idx}") })
                 .to_string()
                 .into(),
         ))
         .await
         .expect("send input");
+        ws.send(WsMessage::Text(
+            json!({ "type": "input", "data": "\r" }).to_string().into(),
+        ))
+        .await
+        .expect("send bare enter");
 
         // Wait until exit frame arrives
         let mut saw_exit = false;
@@ -658,7 +663,10 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
 
     assert_eq!(invocations[0].provider, CliProvider::ClaudeCode);
     assert_eq!(invocations[0].program, "claude");
-    assert_eq!(invocations[0].args, vec!["login".to_string()]);
+    assert_eq!(
+        invocations[0].args,
+        vec!["auth".to_string(), "login".to_string()]
+    );
     assert_eq!(invocations[0].cols, 100);
     assert_eq!(invocations[0].rows, 30);
     assert_eq!(
@@ -685,10 +693,16 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
         Some(accounts[2].profile_dir.as_str())
     );
 
+    for inv in &invocations {
+        assert_eq!(inv.env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(inv.env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+    }
+
     let inputs = h.cli_runner.recorded_pty_inputs();
-    assert!(inputs.iter().any(|b| b == b"oauth-code-0\r"));
-    assert!(inputs.iter().any(|b| b == b"oauth-code-1\r"));
-    assert!(inputs.iter().any(|b| b == b"oauth-code-2\r"));
+    assert!(inputs.iter().any(|b| b == b"\r"), "bare enter must arrive as CR");
+    assert!(inputs.iter().any(|b| b == b"oauth-code-0"));
+    assert!(inputs.iter().any(|b| b == b"oauth-code-1"));
+    assert!(inputs.iter().any(|b| b == b"oauth-code-2"));
 
     let resizes = h.cli_runner.recorded_pty_resizes();
     assert_eq!(resizes.len(), 3);

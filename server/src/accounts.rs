@@ -80,10 +80,18 @@ pub fn router(state: AppState) -> Router<AppState> {
         .merge(project_scoped)
 }
 
+/// Terminal capability variables every PTY (login or project terminal) must carry,
+/// so TUIs handle keys and colors even when the Gateway runs as a service.
+pub fn apply_pty_term_env(env: &mut BTreeMap<String, String>) {
+    env.insert("TERM".to_string(), "xterm-256color".to_string());
+    env.insert("COLORTERM".to_string(), "truecolor".to_string());
+}
+
 /// Returns the isolated environment variables for spawning a CLI process or login PTY
 /// under the given account profile directory.
 pub fn account_env_vars(provider: CliProvider, profile_dir: &StdPath) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
+    apply_pty_term_env(&mut env);
     env.insert(
         provider.config_env_var().to_string(),
         profile_dir.to_string_lossy().into_owned(),

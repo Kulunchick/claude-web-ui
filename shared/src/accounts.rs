@@ -48,7 +48,7 @@ impl CliProvider {
 
     pub fn login_command(&self) -> (&'static str, &'static [&'static str]) {
         match self {
-            CliProvider::ClaudeCode => ("claude", &["login"]),
+            CliProvider::ClaudeCode => ("claude", &["auth", "login"]),
             CliProvider::Codex => ("codex", &["login"]),
             CliProvider::Antigravity => ("agy", &[]),
         }

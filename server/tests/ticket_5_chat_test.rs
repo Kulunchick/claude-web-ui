@@ -1467,6 +1467,14 @@ async fn project_terminal_pty_and_rbac_enforces_viewer_readonly() {
         pty_invs[0].env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
         Some(claude_acc.profile_dir.as_str())
     );
+    assert_eq!(
+        pty_invs[0].env.get("TERM").map(String::as_str),
+        Some("xterm-256color")
+    );
+    assert_eq!(
+        pty_invs[0].env.get("COLORTERM").map(String::as_str),
+        Some("truecolor")
+    );
     assert_eq!(h.cli_runner.recorded_pty_resizes(), vec![(120, 40)]);
     assert!(!h.cli_runner.recorded_pty_inputs().is_empty());
 
@@ -1514,6 +1522,32 @@ async fn project_terminal_pty_and_rbac_enforces_viewer_readonly() {
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn project_shell_terminal_without_account_gets_term_env() {
+    let h = TestHarness::new().await;
+    let admin = h.bootstrap_admin().await;
+    let alpha = h.create_project(&admin.access_token, "Alpha").await;
+    let (addr, server_task) = h.spawn_tcp().await;
+
+    h.cli_runner.push_pty_output(b"$ ".to_vec());
+    let (mut ws, _) = tokio_tungstenite::connect_async(&format!(
+        "ws://{}/api/projects/{}/terminal/ws?token={}&cols=100&rows=30",
+        addr, alpha.id, admin.access_token
+    ))
+    .await
+    .expect("admin can open shell terminal");
+    let first = ws.next().await.unwrap().unwrap();
+    assert!(first.into_text().unwrap().contains("$ "));
+
+    let invs = h.cli_runner.recorded_pty_invocations();
+    assert_eq!(invs.len(), 1);
+    assert_eq!(invs[0].env.get("TERM").map(String::as_str), Some("xterm-256color"));
+    assert_eq!(invs[0].env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+    assert_eq!((invs[0].cols, invs[0].rows), (100, 30));
 
     server_task.abort();
 }
