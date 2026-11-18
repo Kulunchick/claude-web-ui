@@ -2091,7 +2091,8 @@ async fn project_terminal_ws(
         account.as_ref().map(|account| account.id.as_str()),
     )
     .await?;
-    let env = cli_target_env(account.as_ref());
+    let mut env = cli_target_env(account.as_ref());
+    crate::accounts::apply_pty_term_env(&mut env);
 
     let invocation = if session.is_some() || query.mode.as_deref() == Some("cli") {
         let resume_id = session.as_ref().and_then(|session| session.native_session_id.as_deref());
