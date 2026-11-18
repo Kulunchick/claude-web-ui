@@ -1661,12 +1661,121 @@ input[type="checkbox"].switch:checked::before {
   gap: var(--space-4);
 }
 
-/* ---------- Screen: chat & terminal --------------------------------------- */
+/* ---------- Screen: chat & terminal ---------------------------------------
+   section.chat-workspace > .chat-main (head, feed, composer, terminal)
+                          + button.chat-rail-scrim + aside.chat-rail (search, sessions)
+   From lg (1024px) the rail is a 240px column on the right; below it the rail is a
+   right-side drawer opened by #chat-rail-toggle in the page header (.is-rail-open). */
 .chat-workspace {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
+  min-width: 0;
+}
+
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.chat-main-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.chat-title {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.chat-title .project-path { margin-top: var(--space-1); }
+
+.chat-controls { justify-content: flex-end; }
+
+.chat-source-toggle { align-self: flex-start; }
+
+.approval-mode-toggle[aria-pressed="true"] {
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+/* Right rail / drawer */
+.chat-rail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  width: min(320px, 85vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  overflow-y: auto;
+  background: var(--background);
+  border-left: 1px solid var(--border-strong);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 200ms ease, visibility 0s linear 200ms;
+}
+
+.is-rail-open .chat-rail {
+  transform: none;
+  visibility: visible;
+  transition: transform 200ms ease;
+}
+
+.chat-rail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  padding: 0;
+  border: 0;
+  background: var(--overlay);
+  cursor: default;
+}
+
+.is-rail-open .chat-rail-scrim { display: block; }
+
+.chat-rail-head { margin-bottom: 0; }
+.chat-rail-head h3 { margin: 0; }
+.chat-rail .form-group { margin-bottom: 0; }
+
+#chat-rail-toggle { display: inline-flex; }
+
+@media (min-width: 1024px) {
+  .chat-workspace { grid-template-columns: minmax(0, 1fr) 240px; }
+
+  .chat-rail {
+    position: sticky;
+    top: 0;
+    z-index: auto;
+    width: auto;
+    max-height: calc(100dvh - var(--shell-bar-height) - var(--space-8));
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    background: var(--card-glass);
+    transform: none;
+    visibility: visible;
+    transition: none;
+  }
+
+  .chat-rail-scrim,
+  .is-rail-open .chat-rail-scrim { display: none; }
+
+  .chat-rail-close,
+  #chat-rail-toggle { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-rail,
+  .is-rail-open .chat-rail { transition: none; }
 }
 
 .session-list {
@@ -1678,15 +1787,23 @@ input[type="checkbox"].switch:checked::before {
   gap: 2px;
 }
 
-.session-item .panel-header-row { margin-bottom: var(--space-1); }
+.session-item-head { margin-bottom: var(--space-1); }
+.session-item-head { flex-wrap: wrap; gap: var(--space-1); }
+.session-item-head .truncate { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.session-item-meta {
+  margin: 0;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
 
+/* Feed and cards */
 .chat-feed {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin: 14px 0;
   max-height: 55vh;
   overflow-y: auto;
+  min-width: 0;
 }
 
 .turn-card {
@@ -1694,10 +1811,24 @@ input[type="checkbox"].switch:checked::before {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
+  min-width: 0;
+}
+
+.turn-card-head { margin-bottom: var(--space-2); }
+.turn-prompt { margin: 0 0 var(--space-2); overflow-wrap: anywhere; }
+.event-note { margin: var(--space-1) 0; }
+
+.turn-card pre {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .event-text, .event-complete {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: var(--leading);
   margin: var(--space-1) 0;
 }
@@ -1712,8 +1843,8 @@ input[type="checkbox"].switch:checked::before {
   background: var(--code-background);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: var(--space-2) 10px;
-  margin: 6px 0;
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
   font-size: var(--text-sm);
 }
 
@@ -1722,16 +1853,25 @@ input[type="checkbox"].switch:checked::before {
 }
 
 .approval-card {
-  margin-top: 10px;
+  margin-top: var(--space-3);
   padding: var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--warning-border);
   background: var(--warning-tint);
 }
 
-.chat-composer {
-  margin-top: 10px;
+.approval-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
+
+.chat-composer { margin: 0; }
+.chat-composer-actions { margin-top: var(--space-2); }
+
+/* Project terminal: black rounded card (.xterm-container) under a plain header */
+.chat-terminal-head { margin-bottom: var(--space-2); }
 
 .workspace-header-card {
   display: flex;
