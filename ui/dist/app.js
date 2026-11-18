@@ -590,6 +590,298 @@
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Dashboard shell: sidebar, page header, drawer.
+  //
+  // renderDashboard() rebuilds the shell on every render(), so whatever must
+  // survive a render (collapse, drawer, gateway status) lives in `shell` and is
+  // re-applied from there. Navigation state stays in `state.tab` (top level) and
+  // `state.projectTab` (project section); the sidebar items only drive it.
+  // ---------------------------------------------------------------------------
+  const SIDEBAR_COLLAPSED_KEY = "cwu_sidebar_collapsed";
+  const GATEWAY_STATUS_INTERVAL_MS = 30000;
+
+  const shell = {
+    collapsed: readSidebarCollapsed(),
+    drawerOpen: false,
+    gatewayStatus: "checking", // "checking" | "online" | "offline"
+    version: null,
+    statusTimer: null,
+  };
+
+  // Storage can be unavailable (private mode, blocked site data); the
+  // preference is then simply not remembered.
+  function readSidebarCollapsed() {
+    try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"; } catch { return false; }
+  }
+
+  function writeSidebarCollapsed(collapsed) {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch {}
+  }
+
+  function applyShellClasses() {
+    const root = app.querySelector(".dashboard-shell");
+    if (!root) return;
+    root.classList.toggle("is-collapsed", shell.collapsed);
+    root.classList.toggle("is-drawer-open", shell.drawerOpen);
+    const collapse = document.getElementById("sidebar-collapse-btn");
+    if (collapse) {
+      const label = shell.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      collapse.setAttribute("aria-pressed", String(shell.collapsed));
+      collapse.setAttribute("aria-label", label);
+      collapse.title = label;
+    }
+    const hamburger = document.getElementById("sidebar-open-btn");
+    if (hamburger) hamburger.setAttribute("aria-expanded", String(shell.drawerOpen));
+  }
+
+  function setDrawerOpen(open) {
+    shell.drawerOpen = open;
+    applyShellClasses();
+  }
+
+  // Navigating from the drawer closes it. Capture phase, so the flag is cleared
+  // before the item's own onclick re-renders the shell.
+  app.addEventListener("click", (event) => {
+    if (shell.drawerOpen && event.target.closest(".sidebar .nav-item, .sidebar .project-item")) {
+      setDrawerOpen(false);
+    }
+  }, true);
+
+  // The project switcher is a <details> dropdown: an outside click closes it.
+  document.addEventListener("click", (event) => {
+    const switcher = app.querySelector(".project-switcher[open]");
+    if (switcher && !switcher.contains(event.target)) switcher.open = false;
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const switcher = app.querySelector(".project-switcher[open]");
+    if (switcher) {
+      switcher.open = false;
+      switcher.querySelector("summary").focus();
+    } else if (shell.drawerOpen) {
+      setDrawerOpen(false);
+      document.getElementById("sidebar-open-btn")?.focus();
+    }
+  });
+
+  function renderGatewayStatus() {
+    const el = document.getElementById("gateway-status");
+    if (!el) return;
+    const label = { checking: "Checking", online: "Online", offline: "Unreachable" }[shell.gatewayStatus];
+    el.dataset.status = shell.gatewayStatus;
+    el.title = `Gateway: ${label}`;
+    el.querySelector(".system-status-value").textContent = label;
+    const version = document.getElementById("gateway-version");
+    if (version) version.textContent = shell.version ? `v${shell.version}` : "";
+  }
+
+  async function refreshGatewayStatus() {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      shell.gatewayStatus = res.ok ? "online" : "offline";
+    } catch {
+      shell.gatewayStatus = "offline";
+    }
+    if (!shell.version && shell.gatewayStatus === "online") {
+      try {
+        const res = await fetch("/api/version", { cache: "no-store" });
+        if (res.ok) shell.version = (await res.json()).version || null;
+      } catch {}
+    }
+    renderGatewayStatus();
+  }
+
+  function startGatewayStatus() {
+    if (shell.statusTimer) return;
+    void refreshGatewayStatus();
+    shell.statusTimer = setInterval(() => {
+      if (!state.user) {
+        clearInterval(shell.statusTimer);
+        shell.statusTimer = null;
+        return;
+      }
+      void refreshGatewayStatus();
+    }, GATEWAY_STATUS_INTERVAL_MS);
+  }
+
+  // Inline 16px stroke icons for the nav rail (no icon font, no CDN).
+  const ICON_PATHS = {
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    files: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/>',
+    kanban: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+    cron: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    agents: '<rect x="4" y="8" width="16" height="12" rx="1"/><path d="M12 8V4"/><path d="M9 4h6"/><path d="M9 13v2"/><path d="M15 13v2"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.8-8.8"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/>',
+    folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    chevron: '<path d="m6 9 6 6 6-6"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+    rail: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M9 3v18"/>',
+    menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+    close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  };
+
+  function icon(name) {
+    return `<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON_PATHS[name]}</svg>`;
+  }
+
+  // `label` is trusted markup (entities allowed); the title attribute is the
+  // tooltip in the collapsed rail.
+  function navItem(id, label, iconName, active) {
+    return `<button class="nav-item${active ? " active" : ""}" id="${id}" type="button" title="${label}"${active ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-label">${label}</span></button>`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Page header API (for the screen renderers).
+  //
+  // The 56px header above the scrolling content holds the page title, an
+  // optional count badge next to it, and an action slot on the right that ends
+  // with the CLI switcher island (#project-cli-workspace).
+  //
+  // renderDashboard() resets the header to the screen's default (title from
+  // SCREEN_TITLES, no count, no actions) and then runs the per-screen branch.
+  // Call setPageHeader() in that branch, or at any time after render to patch
+  // the live header in place without a re-render:
+  //
+  //   setPageHeader({ title: "CLI Accounts", count: state.adminAccounts.length });
+  //   setPageHeader({ actions: '<button class="btn btn-sm" id="my-action" type="button">New</button>' });
+  //   setPageHeader({ count: null }); // hides the badge
+  //
+  //   title    plain text (escaped)
+  //   count    number or short text shown as a badge; null/undefined/"" hides it
+  //   actions  trusted HTML placed before the CLI switcher; bind its ids in
+  //            bindDashboardHandlers() like any other element
+  //
+  // pageHeaderActionsSlot() returns the element that holds `actions`, e.g. to
+  // mount a Leptos island there after render.
+  // ---------------------------------------------------------------------------
+  const pageHeader = { title: "", count: null, actions: "" };
+
+  const SCREEN_TITLES = {
+    agents_skills_mcp: "Agents, Skills & MCP",
+    admin: "Users & Projects",
+    accounts: "CLI Accounts",
+    chat: "Chat & Terminal",
+    files: "Files & Git",
+    kanban: "Kanban",
+    cron: "Cron",
+    none: "No Project Selected",
+  };
+
+  function hasPageHeaderCount() {
+    return pageHeader.count !== null && pageHeader.count !== undefined && pageHeader.count !== "";
+  }
+
+  function setPageHeader(patch) {
+    Object.assign(pageHeader, patch);
+    const title = document.getElementById("page-title");
+    if (!title) return;
+    if ("title" in patch) title.textContent = pageHeader.title;
+    if ("count" in patch) {
+      const badge = document.getElementById("page-title-count");
+      badge.textContent = hasPageHeaderCount() ? String(pageHeader.count) : "";
+      badge.hidden = !hasPageHeaderCount();
+    }
+    if ("actions" in patch) pageHeaderActionsSlot().innerHTML = pageHeader.actions || "";
+  }
+
+  function pageHeaderActionsSlot() {
+    return document.getElementById("page-header-actions-extra");
+  }
+
+  function pageHeaderHtml() {
+    const count = hasPageHeaderCount();
+    return `
+      <header class="page-header" id="page-header">
+        <div class="page-header-title">
+          <h1 id="page-title" class="truncate">${esc(pageHeader.title)}</h1>
+          <span class="badge badge-outline" id="page-title-count"${count ? "" : " hidden"}>${count ? esc(pageHeader.count) : ""}</span>
+        </div>
+        <div class="page-header-actions">
+          <div class="page-header-actions-extra" id="page-header-actions-extra">${pageHeader.actions || ""}</div>
+          <div id="project-cli-workspace"></div>
+        </div>
+      </header>
+    `;
+  }
+
+  function sidebarHtml(activeProject, isAdmin) {
+    const projectNav = activeProject ? `
+          <div class="nav-group">
+            ${navItem("proj-tab-chat", "Chat &amp; Terminal", "chat", state.tab === "overview" && state.projectTab === "chat")}
+            ${navItem("proj-tab-files", "Files &amp; Git", "files", state.tab === "overview" && state.projectTab === "files")}
+            ${navItem("proj-tab-kanban", "Kanban", "kanban", state.tab === "overview" && state.projectTab === "kanban")}
+            ${navItem("proj-tab-cron", "Cron", "cron", state.tab === "overview" && state.projectTab === "cron")}
+          </div>` : "";
+    const projectName = activeProject ? esc(activeProject.name) : "Select project";
+    const signOut = `Sign Out (${esc(state.user.username)})`;
+    return `
+      <aside class="sidebar" id="sidebar" aria-label="Navigation">
+        <div class="sidebar-header">
+          <div class="brand">
+            <span class="brand-name">Claude Web UI</span>
+          </div>
+          <button class="btn-ghost btn-icon btn-sm sidebar-collapse-btn" id="sidebar-collapse-btn" type="button" aria-controls="sidebar">${icon("rail")}</button>
+          <button class="btn-ghost btn-icon btn-sm sidebar-close-btn" id="sidebar-close-btn" type="button" aria-label="Close navigation" title="Close navigation">${icon("close")}</button>
+        </div>
+        <details class="project-switcher">
+          <summary class="project-switcher-trigger" title="Project: ${projectName}">
+            ${icon("folder")}
+            <span class="project-switcher-text">
+              <span class="project-switcher-label">Project</span>
+              <span class="project-switcher-name truncate">${projectName}</span>
+            </span>
+            <span class="project-switcher-chevron">${icon("chevron")}</span>
+          </summary>
+          <div class="project-switcher-menu">
+            <div id="project-list"></div>
+          </div>
+        </details>
+        <nav class="sidebar-nav">
+          ${projectNav}
+          <div class="nav-group">
+            <h3 class="nav-group-heading">Workspace</h3>
+            ${navItem("nav-asm", "Agents, Skills &amp; MCP", "agents", state.tab === "agents_skills_mcp")}
+            ${isAdmin ? navItem("nav-admin", "Admin: Users &amp; Projects", "users", state.tab === "admin") : ""}
+            ${isAdmin ? navItem("nav-accounts", "Admin: CLI Accounts", "key", state.tab === "accounts") : ""}
+          </div>
+        </nav>
+        <div class="sidebar-system">
+          <h3 class="nav-group-heading">System</h3>
+          <div class="system-status" id="gateway-status" data-status="${shell.gatewayStatus}">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="system-status-label">Gateway</span>
+            <span class="system-status-value">Checking</span>
+          </div>
+          <button class="nav-item" id="pair-messenger-btn" type="button" title="Pair Telegram or Discord">${icon("link")}<span class="nav-label">Pair Telegram or Discord</span></button>
+          <p class="subtitle sidebar-pair-result" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
+          <button class="nav-item" id="logout-btn" type="button" title="${signOut}">${icon("logout")}<span class="nav-label">${signOut}</span></button>
+          <div class="sidebar-version">
+            <span id="gateway-version">${shell.version ? `v${esc(shell.version)}` : ""}</span>
+            <span class="role-badge" title="Your role">${esc(state.user.role)}</span>
+          </div>
+        </div>
+      </aside>
+    `;
+  }
+
+  function bindShellHandlers() {
+    document.getElementById("sidebar-collapse-btn").onclick = () => {
+      shell.collapsed = !shell.collapsed;
+      writeSidebarCollapsed(shell.collapsed);
+      applyShellClasses();
+    };
+    document.getElementById("sidebar-open-btn").onclick = () => setDrawerOpen(true);
+    document.getElementById("sidebar-close-btn").onclick = () => setDrawerOpen(false);
+    document.getElementById("sidebar-scrim").onclick = () => setDrawerOpen(false);
+    applyShellClasses();
+    renderGatewayStatus();
+    startGatewayStatus();
+  }
+
   function renderDashboard() {
     closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
@@ -597,14 +889,22 @@
     const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
     const okHtml = state.notice ? `<div class="alert-success">${esc(state.notice)}</div>` : "";
 
+    // The screen being shown, derived from the two-level navigation state.
+    const screen = (state.tab === "admin" || state.tab === "accounts") && isAdmin ? state.tab
+      : state.tab === "agents_skills_mcp" ? state.tab
+      : !activeProject ? "none"
+      : state.projectTab;
+    // Header defaults for the screen; the branches below may call setPageHeader().
+    Object.assign(pageHeader, { title: SCREEN_TITLES[screen] || "", count: null, actions: "" });
+
     let mainHtml = "";
-    if (state.tab === "admin" && isAdmin) {
+    if (screen === "admin") {
       mainHtml = '<div id="admin-workspace"></div>';
-    } else if (state.tab === "accounts" && isAdmin) {
+    } else if (screen === "accounts") {
       mainHtml = '<div id="accounts-workspace"></div>';
-    } else if (state.tab === "agents_skills_mcp") {
+    } else if (screen === "agents_skills_mcp") {
       mainHtml = '<div id="asm-workspace"></div>';
-    } else if (!activeProject) {
+    } else if (screen === "none") {
       mainHtml = `
         <section class="panel-card">
           <h2>No Project Selected</h2>
@@ -612,47 +912,23 @@
         </section>
       `;
     } else {
-      mainHtml = `
-        <div class="tab-bar" style="margin:0;">
-          <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
-          <button class="btn-secondary ${state.projectTab === "files" ? "active" : ""}" id="proj-tab-files" type="button">Files &amp; Git</button>
-          <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
-          <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
-        </div>
-        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>'}
-      `;
+      mainHtml = screen === "files" ? '<div id="files-git-workspace"></div>' : screen === "kanban" ? '<div id="kanban-workspace"></div>' : screen === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>';
     }
 
     app.innerHTML = `
-      <div class="dashboard-shell">
-        <aside class="sidebar">
-          <div class="brand">
-            <h1>Claude Web UI</h1>
-            <span class="role-badge">${esc(state.user.role)}</span>
-          </div>
-          <div class="sidebar-section">
-            <h3>Projects</h3>
-            <div id="project-list"></div>
-          </div>
-          <div class="sidebar-section">
-            <h3>Workspace</h3>
-            <button class="nav-item ${state.tab === "agents_skills_mcp" ? "active" : ""}" id="nav-asm">Agents, Skills &amp; MCP</button>
-          </div>
-          ${isAdmin ? `
-            <div class="sidebar-section">
-              <button class="nav-item ${state.tab === "admin" ? "active" : ""}" id="nav-admin">Admin: Users &amp; Projects</button>
-              <button class="nav-item ${state.tab === "accounts" ? "active" : ""}" id="nav-accounts">Admin: CLI Accounts</button>
-            </div>` : ""}
-          <div class="sidebar-section">
-            <button class="btn-secondary" id="pair-messenger-btn">Pair Telegram or Discord</button>
-            <p class="subtitle" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
-            <button class="btn-secondary" id="logout-btn">Sign Out (${esc(state.user.username)})</button>
-          </div>
-        </aside>
-        <main class="dashboard-main">
-          <div id="project-cli-workspace"></div>
-          ${errHtml}${okHtml}${mainHtml}
-        </main>
+      <div class="dashboard-shell" data-screen="${esc(screen)}">
+        ${sidebarHtml(activeProject, isAdmin)}
+        <button class="sidebar-scrim" id="sidebar-scrim" type="button" tabindex="-1" aria-label="Close navigation"></button>
+        <div class="dashboard-column">
+          <header class="mobile-header">
+            <button class="btn-ghost btn-icon btn-sm" id="sidebar-open-btn" type="button" aria-controls="sidebar" aria-label="Open navigation" title="Open navigation">${icon("menu")}</button>
+            <span class="brand-name">Claude Web UI</span>
+          </header>
+          ${pageHeaderHtml()}
+          <main class="dashboard-main">
+            ${errHtml}${okHtml}${mainHtml}
+          </main>
+        </div>
       </div>
       <div id="account-modal-host"></div>
     `;
@@ -741,6 +1017,7 @@
     }
     const admin = document.getElementById("admin-workspace");
     if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
+    bindShellHandlers();
     bindDashboardHandlers();
   }
 
@@ -1008,16 +1285,18 @@
   }
 
   function bindDashboardHandlers() {
+    // Project sections live in the sidebar next to the workspace screens, so
+    // picking one also returns the top-level tab to the project view.
     const kanbanTab = document.getElementById("proj-tab-kanban");
-    if (kanbanTab) kanbanTab.onclick = () => { state.projectTab = "kanban"; render(); };
+    if (kanbanTab) kanbanTab.onclick = () => { state.tab = "overview"; state.projectTab = "kanban"; render(); };
     const projTabChat = document.getElementById("proj-tab-chat");
-    if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
+    if (projTabChat) projTabChat.onclick = () => { state.tab = "overview"; state.projectTab = "chat"; render(); };
 
     const projTabCron = document.getElementById("proj-tab-cron");
-    if (projTabCron) projTabCron.onclick = () => { state.projectTab = "cron"; render(); };
+    if (projTabCron) projTabCron.onclick = () => { state.tab = "overview"; state.projectTab = "cron"; render(); };
 
     const projTabFiles = document.getElementById("proj-tab-files");
-    if (projTabFiles) projTabFiles.onclick = () => { state.projectTab = "files"; render(); };
+    if (projTabFiles) projTabFiles.onclick = () => { state.tab = "overview"; state.projectTab = "files"; render(); };
 
     const newSessBtn = document.getElementById("new-chat-session-btn");
     if (newSessBtn) {
