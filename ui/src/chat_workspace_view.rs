@@ -307,7 +307,7 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
                     <form id="chat-prompt-form" class="chat-composer">
                         <textarea id="chat-prompt-input" rows="3" placeholder="Send prompt to active CLI..." required></textarea>
                         <div class="btn-group" style="margin-top:8px;">
-                            <button class="btn-primary" type="submit" style="width:auto;">"Send Prompt"</button>
+                            <button class="btn-primary" type="submit">"Send Prompt"</button>
                         </div>
                     </form>
                 })}

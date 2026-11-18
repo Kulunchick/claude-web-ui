@@ -1014,6 +1014,69 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     let css = String::from_utf8_lossy(&css_bytes);
     assert!(css.contains("/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2"));
 
+    // Hermes Teal: the base tokens every other color is derived from.
+    for token in [
+        "--background-base: #041c1c;",
+        "--midground-base: #ffe6cb;",
+        "--terminal-background: #000000;",
+        "--terminal-foreground: #f0e6d2;",
+        "--destructive: #fb2c36;",
+        "--success: #4ade80;",
+        "--warning: #ffbd38;",
+    ] {
+        assert!(css.contains(token), "stylesheet is missing token `{token}`");
+    }
+
+    // Display and typewriter faces are self-hosted next to their OFL licenses.
+    for (font_path, license_path) in [
+        (
+            "/fonts/unbounded/Unbounded-Regular.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/unbounded/Unbounded-Bold.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/courier-prime/CourierPrime-Regular.woff2",
+            "/fonts/courier-prime/OFL.txt",
+        ),
+        (
+            "/fonts/courier-prime/CourierPrime-Bold.woff2",
+            "/fonts/courier-prime/OFL.txt",
+        ),
+    ] {
+        assert!(css.contains(font_path), "stylesheet does not load `{font_path}`");
+        let resp = h
+            .server
+            .router()
+            .oneshot(Request::builder().uri(font_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(content_type, "font/woff2", "{font_path} content type");
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(bytes.starts_with(b"wOF2"), "{font_path} is not woff2");
+
+        let resp = h
+            .server
+            .router()
+            .oneshot(Request::builder().uri(license_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("SIL OPEN FONT LICENSE"),
+            "{license_path} is not the OFL"
+        );
+    }
+
     let js_resp = h
         .server
         .router()
