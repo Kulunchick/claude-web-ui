@@ -90,7 +90,12 @@
     return data;
   }
 
+  function setPtyLive(live) {
+    try { if (leptos && leptos.set_oauth_terminal_live) leptos.set_oauth_terminal_live(live); } catch {}
+  }
+
   function closeActivePty() {
+    setPtyLive(false);
     if (state.ptySocket) {
       try { state.ptySocket.close(); } catch {}
       state.ptySocket = null;
@@ -744,6 +749,8 @@
       }
       term.open(host);
       state.ptyTerminal = term;
+      term.focus();
+      host.addEventListener("click", () => term.focus());
     } else if (fallbackLog && fallbackForm) {
       fallbackLog.textContent = "Connecting to PTY...\n";
       fallbackForm.style.display = "flex";
@@ -752,6 +759,10 @@
     const wsUrl = `${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`;
     const ws = new WebSocket(wsUrl);
     state.ptySocket = ws;
+    setPtyLive(true);
+    const markEnded = () => { if (state.ptySocket === ws) setPtyLive(false); };
+    ws.onclose = markEnded;
+    ws.onerror = markEnded;
 
     ws.onmessage = (ev) => {
       try {
@@ -761,6 +772,7 @@
           else if (fallbackLog) fallbackLog.innerHTML += linkifyUrls(msg.data);
         } else if (msg.type === "exit") {
           const note = `\r\n[Process exited with code ${msg.code}]\r\n`;
+          markEnded();
           if (term) term.write(note);
           else if (fallbackLog) fallbackLog.innerHTML += esc(note);
         } else if (msg.type === "error") {

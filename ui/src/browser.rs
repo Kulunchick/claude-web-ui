@@ -209,6 +209,13 @@ pub fn mount_accounts_admin(parent: HtmlElement, workspace: &str) -> Result<(), 
     Ok(())
 }
 
+/// Tells the account modal whether a PTY session is live, so its launch button
+/// reads "Restart terminal" while one is.
+#[wasm_bindgen]
+pub fn set_oauth_terminal_live(live: bool) {
+    crate::accounts_admin_view::set_oauth_terminal_live(live);
+}
+
 #[wasm_bindgen]
 pub fn mount_account_modal(parent: HtmlElement, modal: &str) -> Result<(), JsValue> {
     let modal: crate::accounts_admin_view::AccountModalState =
