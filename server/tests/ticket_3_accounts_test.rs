@@ -1037,6 +1037,16 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
             "/fonts/unbounded/Unbounded-Bold.woff2",
             "/fonts/unbounded/OFL.txt",
         ),
+        // Unbounded Cyrillic subset: the UI is used with Cyrillic content. JetBrains Mono is
+        // the full glyph set already; Courier Prime has no Cyrillic and falls back to Courier New.
+        (
+            "/fonts/unbounded/Unbounded-Cyrillic-Regular.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/unbounded/Unbounded-Cyrillic-Bold.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
         (
             "/fonts/courier-prime/CourierPrime-Regular.woff2",
             "/fonts/courier-prime/OFL.txt",
