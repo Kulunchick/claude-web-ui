@@ -80,6 +80,14 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
+fn status_class(status: &str) -> &'static str {
+    match status {
+        "running" | "in_progress" | "active" => "badge badge-success",
+        "failed" | "error" | "cancelled" => "badge badge-destructive",
+        _ => "badge badge-secondary",
+    }
+}
+
 fn turn_event(event: Value) -> AnyView {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or_default();
     match kind {
@@ -104,15 +112,15 @@ fn turn_event(event: Value) -> AnyView {
             view! { <div class=class><pre>{str_field(&event, "output")}</pre></div> }.into_any()
         }
         "subagent_start" => view! {
-            <div class="role-badge">{format!("Subagent started: {}", str_field(&event, "name"))}</div>
+            <div class="badge badge-secondary">{format!("Subagent started: {}", str_field(&event, "name"))}</div>
         }
         .into_any(),
         "subagent_end" => view! {
-            <div class="role-badge">{format!("Subagent finished: {}", str_field(&event, "id"))}</div>
+            <div class="badge badge-secondary">{format!("Subagent finished: {}", str_field(&event, "id"))}</div>
         }
         .into_any(),
         "permission_request" => view! {
-            <div class="subtitle">{format!("Requested approval for {}", str_field(&event, "tool_name"))}</div>
+            <div class="subtitle event-note">{format!("Requested approval for {}", str_field(&event, "tool_name"))}</div>
         }
         .into_any(),
         "turn_complete" => {
@@ -165,11 +173,11 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
             view! {
                 <li>
                     <button class=class data-sid=s.id>
-                        <div class="panel-header-row" style="margin-bottom:4px;">
-                            <strong>{s.title}</strong>
-                            <span class="role-badge">{s.provider.display_name()}</span>
+                        <div class="panel-header-row session-item-head">
+                            <strong class="truncate">{s.title}</strong>
+                            <span class="badge badge-secondary">{s.provider.display_name()}</span>
                         </div>
-                        <div class="subtitle" style="margin:0;font-size:0.78rem;">
+                        <div class="subtitle session-item-meta">
                             <span>{s.source}</span>
                             {s.native_session_id.map(|native| view! { " \u{2022} " <code>{native}</code> })}
                         </div>
@@ -188,25 +196,29 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
             .turns
             .into_iter()
             .map(|t| {
+                let status_badge = status_class(&t.status);
                 let approval = t.pending_permission.filter(|_| !is_viewer).map(|p| {
                     view! {
                         <div class="approval-card" data-view="approval-prompt">
-                            <strong>{format!("Permission Request: {}", p.tool_name)}</strong>
+                            <div class="approval-card-head">
+                                <span class="badge badge-warning">"Approval"</span>
+                                <strong>{format!("Permission Request: {}", p.tool_name)}</strong>
+                            </div>
                             <pre>{pretty(&p.input)}</pre>
                             <div class="btn-group">
-                                <button class="btn-primary" data-allow-turn=t.id.clone() data-req-id=p.request_id.clone() type="button">"Allow"</button>
-                                <button class="btn-danger" data-deny-turn=t.id.clone() data-req-id=p.request_id type="button">"Deny"</button>
+                                <button class="btn-primary btn-sm" data-allow-turn=t.id.clone() data-req-id=p.request_id.clone() type="button">"Allow"</button>
+                                <button class="btn-danger btn-sm" data-deny-turn=t.id.clone() data-req-id=p.request_id type="button">"Deny"</button>
                             </div>
                         </div>
                     }
                 });
                 view! {
                     <article class="turn-card">
-                        <div class="panel-header-row" style="margin-bottom:6px;">
+                        <div class="panel-header-row turn-card-head">
                             <strong>"Prompt"</strong>
-                            <span class="role-badge">{t.status}</span>
+                            <span class=status_badge>{t.status}</span>
                         </div>
-                        <p style="margin:0 0 8px;">{t.prompt}</p>
+                        <p class="turn-prompt">{t.prompt}</p>
                         <div class="turn-events">{t.events.into_iter().map(turn_event).collect_view()}</div>
                         {t.error_message.map(|e| view! { <div class="alert-error">{e}</div> })}
                         {approval}
@@ -223,24 +235,26 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
         "Mode: Full Auto"
     };
     let has_active_session = state.has_active_session;
+    let approval_pressed = if state.approval_mode == "interactive" { "true" } else { "false" };
+    let live = has_active_session && (state.has_active_turn || state.native_source);
     let controls = if is_viewer {
-        view! { <span class="role-badge">"Read-Only Stream"</span> }.into_any()
+        view! { <span class="badge badge-secondary">"Read-Only Stream"</span> }.into_any()
     } else {
         view! {
-            <div class="btn-group">
+            <div class="btn-group chat-controls">
                 {state.handoff_provider.map(|p| view! {
-                    <button class="btn-secondary" id="chat-handoff" data-provider=p.as_str() type="button">
+                    <button class="btn-secondary btn-sm" id="chat-handoff" data-provider=p.as_str() type="button">
                         {format!("Continue with {}", p.display_name())}
                     </button>
                 })}
                 {has_active_session.then(|| view! {
-                    <button class="btn-secondary" id="toggle-approval-mode-btn" type="button">{approval_label}</button>
+                    <button class="btn-outline btn-sm approval-mode-toggle" id="toggle-approval-mode-btn" type="button" aria-pressed=approval_pressed>{approval_label}</button>
                 })}
-                <button class="btn-secondary" id="toggle-project-terminal-btn" type="button">
+                <button class="btn-secondary btn-sm" id="toggle-project-terminal-btn" type="button">
                     {if state.show_terminal { "Hide Terminal" } else { "Project Terminal" }}
                 </button>
                 {(has_active_session && state.has_active_turn).then(|| view! {
-                    <button class="btn-danger" id="stop-active-turn-btn" type="button">"Stop"</button>
+                    <button class="btn-danger btn-sm" id="stop-active-turn-btn" type="button">"Stop"</button>
                 })}
             </div>
         }
@@ -249,20 +263,20 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
 
     let terminal = (state.show_terminal && !is_viewer).then(|| {
         view! {
-            <div class="panel-card" style="margin-top:14px;">
-                <div class="panel-header-row">
+            <div class="chat-terminal">
+                <div class="panel-header-row chat-terminal-head">
                     <strong>"Project Terminal (xterm.js)"</strong>
                     <div class="btn-group">
-                        <button class="btn-secondary" id="term-mode-shell" type="button">"Workspace Shell"</button>
-                        <button class="btn-secondary" id="term-mode-cli" type="button">"Resume CLI"</button>
-                        <button class="btn-secondary" id="close-project-term" type="button">"Close"</button>
+                        <button class="btn-secondary btn-sm" id="term-mode-shell" type="button">"Workspace Shell"</button>
+                        <button class="btn-secondary btn-sm" id="term-mode-cli" type="button">"Resume CLI"</button>
+                        <button class="btn-ghost btn-sm" id="close-project-term" type="button">"Close"</button>
                     </div>
                 </div>
                 <div id="project-xterm-host" class="xterm-container">
                     <pre id="project-xterm-fallback" class="xterm-fallback-log">"Connecting to project terminal..."</pre>
-                    <form id="project-xterm-fallback-form" style="display:none; gap:8px;">
+                    <form id="project-xterm-fallback-form" class="inline-form" style="display:none;">
                         <input id="project-xterm-fallback-input" placeholder="Type command and press Enter..." />
-                        <button class="btn-secondary" type="submit">"Send"</button>
+                        <button class="btn-secondary btn-sm" type="submit">"Send"</button>
                     </form>
                 </div>
             </div>
@@ -271,12 +285,45 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
 
     view! {
         <section class="chat-workspace" data-view="chat-workspace">
-            <aside class="chat-sessions-panel panel-card" data-view="session-list">
-                <div class="panel-header-row">
+            <div class="chat-main" data-view="chat-stream">
+                <div class="chat-main-head">
+                    <div class="chat-title">
+                        <h2 class="m-0 truncate">{state.project_name}</h2>
+                        <p class="project-path m-0 truncate">{state.workspace_path}</p>
+                    </div>
+                    {live.then(|| view! { <span class="badge badge-success" id="chat-live-indicator">"Live"</span> })}
+                    {controls}
+                </div>
+
+                {state.can_switch_source.then(|| view! {
+                    <button class="btn-secondary btn-sm chat-source-toggle" id="chat-feed-source" type="button">
+                        {if state.native_source { "Gateway Turns" } else { "Native Transcript" }}
+                    </button>
+                })}
+                <div class="chat-feed">{feed}</div>
+
+                {(!is_viewer).then(|| view! {
+                    <form id="chat-prompt-form" class="chat-composer">
+                        <textarea id="chat-prompt-input" rows="3" placeholder="Send prompt to active CLI..." required></textarea>
+                        <div class="btn-group chat-composer-actions">
+                            <button class="btn-primary" type="submit">"Send Prompt"</button>
+                        </div>
+                    </form>
+                })}
+
+                {terminal}
+            </div>
+
+            <button class="chat-rail-scrim" id="chat-rail-scrim" type="button" tabindex="-1" aria-label="Close sessions"></button>
+            <aside class="chat-rail" id="chat-rail" data-view="session-list">
+                <div class="panel-header-row chat-rail-head">
                     <h3>"Sessions"</h3>
-                    {(!is_viewer).then(|| view! {
-                        <button class="btn-primary" id="new-chat-session-btn" type="button">"+ New Chat"</button>
-                    })}
+                    <div class="btn-group">
+                        {(!is_viewer).then(|| view! {
+                            <button class="btn-primary btn-sm" id="new-chat-session-btn" type="button">"+ New Chat"</button>
+                        })}
+                        <button class="btn-ghost btn-sm chat-rail-close" id="chat-rail-close" type="button" aria-label="Close sessions">"Close"</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <input id="session-search-input" type="search" placeholder="Search sessions..." value=state.session_search />
@@ -286,34 +333,6 @@ pub fn ChatWorkspace(state: ChatWorkspaceState) -> impl IntoView {
                     {(!has_sessions).then(|| view! { <li class="subtitle">"No sessions yet."</li> })}
                 </ul>
             </aside>
-
-            <div class="chat-main-panel panel-card" data-view="chat-stream">
-                <div class="panel-header-row">
-                    <div>
-                        <h2 style="margin:0;">{state.project_name}</h2>
-                        <p class="project-path" style="margin:4px 0 0;">{state.workspace_path}</p>
-                    </div>
-                    {controls}
-                </div>
-
-                {state.can_switch_source.then(|| view! {
-                    <button class="btn-secondary" id="chat-feed-source" type="button">
-                        {if state.native_source { "Gateway Turns" } else { "Native Transcript" }}
-                    </button>
-                })}
-                <div class="chat-feed">{feed}</div>
-
-                {(!is_viewer).then(|| view! {
-                    <form id="chat-prompt-form" class="chat-composer">
-                        <textarea id="chat-prompt-input" rows="3" placeholder="Send prompt to active CLI..." required></textarea>
-                        <div class="btn-group" style="margin-top:8px;">
-                            <button class="btn-primary" type="submit">"Send Prompt"</button>
-                        </div>
-                    </form>
-                })}
-
-                {terminal}
-            </div>
         </section>
     }
 }

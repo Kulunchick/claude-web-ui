@@ -734,6 +734,30 @@
     return `<button class="nav-item${active ? " active" : ""}" id="${id}" type="button" title="${label}"${active ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-label">${label}</span></button>`;
   }
 
+  // Chat session rail: a right-side drawer below the large breakpoint. The open
+  // flag lives here because the chat view is re-mounted on every render.
+  let chatRailOpen = false;
+
+  function applyChatRailState() {
+    const root = app.querySelector(".chat-workspace");
+    if (!root) chatRailOpen = false;
+    if (root) root.classList.toggle("is-rail-open", chatRailOpen);
+    const toggle = document.getElementById("chat-rail-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", String(chatRailOpen));
+  }
+
+  function setChatRailOpen(open) {
+    chatRailOpen = open;
+    applyChatRailState();
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && chatRailOpen) {
+      setChatRailOpen(false);
+      document.getElementById("chat-rail-toggle")?.focus();
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // Page header API (for the screen renderers).
   //
@@ -916,6 +940,9 @@
         </section>
       `;
     } else {
+      if (screen === "chat") {
+        pageHeader.actions = '<button class="btn-outline btn-sm" id="chat-rail-toggle" type="button" aria-controls="chat-rail" aria-expanded="false">Sessions</button>';
+      }
       mainHtml = screen === "files" ? '<div id="files-git-workspace"></div>' : screen === "kanban" ? '<div id="kanban-workspace"></div>' : screen === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>';
     }
 
@@ -986,6 +1013,7 @@
         turns: !nativeSource && detail?.turns ? detail.turns : [],
       }));
     }
+    applyChatRailState();
     const accounts = document.getElementById("accounts-workspace");
     if (accounts) {
       leptos.mount_accounts_admin(accounts, JSON.stringify({
@@ -1377,8 +1405,16 @@
       };
     }
 
+    const railToggle = document.getElementById("chat-rail-toggle");
+    if (railToggle) railToggle.onclick = () => setChatRailOpen(!chatRailOpen);
+    const railScrim = document.getElementById("chat-rail-scrim");
+    if (railScrim) railScrim.onclick = () => setChatRailOpen(false);
+    const railClose = document.getElementById("chat-rail-close");
+    if (railClose) railClose.onclick = () => setChatRailOpen(false);
+
     document.querySelectorAll("[data-sid]").forEach((btn) => {
       btn.onclick = async () => {
+        chatRailOpen = false;
         state.activeSessionId = btn.dataset.sid;
         await loadProjectSessions();
         render();
