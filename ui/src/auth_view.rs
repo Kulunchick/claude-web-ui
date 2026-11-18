@@ -1,20 +1,5 @@
-use claude_web_ui_shared::auth::{InviteDto, ProjectDto, Role, UserDto};
+use claude_web_ui_shared::auth::{InviteDto, ProjectDto, UserDto};
 use leptos::prelude::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthScreen {
-    Bootstrap,
-    Login,
-    RedeemInvite,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DashboardTab {
-    ProjectOverview,
-    AgentsSkillsMcp,
-    AdminUsersProjects,
-    AdminAccounts,
-}
 
 #[component]
 pub fn BootstrapAdminView(
@@ -220,65 +205,6 @@ pub fn ProjectList(
                 }
             />
         </ul>
-    }
-}
-
-#[component]
-pub fn ProjectSwitcherSidebar(
-    projects: ReadSignal<Vec<ProjectDto>>,
-    active_project_id: RwSignal<Option<String>>,
-    current_user: UserDto,
-    active_tab: RwSignal<DashboardTab>,
-) -> impl IntoView {
-    let is_admin = current_user.role == Role::Admin;
-    let role_label = current_user.role.as_str().to_string();
-
-    view! {
-        <aside class="sidebar" data-view="project-switcher">
-            <div class="brand">
-                <h1>"Claude Web UI"</h1>
-                <span class="role-badge">{role_label}</span>
-            </div>
-            <div class="sidebar-section">
-                <h3>"Projects"</h3>
-                <ProjectList
-                    projects=projects
-                    active_project_id=active_project_id.read_only()
-                    on_select=Callback::new(move |id| {
-                        active_project_id.set(Some(id));
-                        active_tab.set(DashboardTab::ProjectOverview);
-                    })
-                />
-            </div>
-            <div class="sidebar-section">
-                <h3>"Workspace"</h3>
-                <button
-                    class="nav-item"
-                    class:active=move || active_tab.get() == DashboardTab::AgentsSkillsMcp
-                    on:click=move |_| active_tab.set(DashboardTab::AgentsSkillsMcp)
-                >
-                    "Agents, Skills & MCP"
-                </button>
-            </div>
-            <Show when=move || is_admin>
-                <div class="sidebar-section">
-                    <button
-                        class="nav-item"
-                        class:active=move || active_tab.get() == DashboardTab::AdminUsersProjects
-                        on:click=move |_| active_tab.set(DashboardTab::AdminUsersProjects)
-                    >
-                        "Admin: Users & Projects"
-                    </button>
-                    <button
-                        class="nav-item"
-                        class:active=move || active_tab.get() == DashboardTab::AdminAccounts
-                        on:click=move |_| active_tab.set(DashboardTab::AdminAccounts)
-                    >
-                        "Admin: CLI Accounts"
-                    </button>
-                </div>
-            </Show>
-        </aside>
     }
 }
 
