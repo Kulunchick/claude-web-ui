@@ -657,9 +657,8 @@ textarea:focus-visible {
 .toggle-label input { width: auto; }
 
 /* ---------- Tabs (uppercase labels, 1px active underline) -----------------
-   .tabs > .tab(.active)   and the existing .tab-bar > .btn-secondary(.active) */
-.tabs,
-.tab-bar {
+   .tabs > .tab(.active) */
+.tabs {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -668,8 +667,7 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
-.tab,
-.tab-bar > .btn-secondary {
+.tab {
   position: relative;
   min-height: var(--control-height);
   padding: 0 var(--space-3);
@@ -685,19 +683,16 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.tab:hover,
-.tab-bar > .btn-secondary:hover {
+.tab:hover {
   background: transparent;
   color: var(--text-primary);
 }
 
-.tab.active,
-.tab-bar > .btn-secondary.active {
+.tab.active {
   color: var(--text-primary);
 }
 
-.tab.active::after,
-.tab-bar > .btn-secondary.active::after {
+.tab.active::after {
   content: "";
   position: absolute;
   left: 0;
@@ -1054,44 +1049,12 @@ input[type="checkbox"].switch:checked::before {
 }
 
 /* ==========================================================================
-   6. Utilities (replace inline margin / width / font-size patches)
+   6. Utilities
    ========================================================================== */
 .m-0 { margin: 0; }
-.mt-0 { margin-top: 0; }
-.mt-1 { margin-top: var(--space-1); }
-.mt-2 { margin-top: var(--space-2); }
-.mt-3 { margin-top: var(--space-3); }
-.mt-4 { margin-top: var(--space-4); }
-.mb-0 { margin-bottom: 0; }
-.mb-1 { margin-bottom: var(--space-1); }
-.mb-2 { margin-bottom: var(--space-2); }
-.mb-3 { margin-bottom: var(--space-3); }
-.mb-4 { margin-bottom: var(--space-4); }
-.w-auto { width: auto; }
-.w-full { width: 100%; }
-.text-xs { font-size: var(--text-xs); }
-.text-sm { font-size: var(--text-sm); }
-.text-secondary { color: var(--text-secondary); }
-.text-tertiary { color: var(--text-tertiary); }
-.font-display { font-family: var(--font-display); text-transform: uppercase; letter-spacing: var(--tracking-title); }
-.font-typewriter { font-family: var(--font-typewriter); }
-.font-mono { font-family: var(--font-mono); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stack { display: flex; flex-direction: column; gap: var(--space-3); }
-.cluster { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 /* For JS-toggled fallback forms: keep inline display:none, the gap comes from here. */
 .inline-form { gap: var(--space-2); }
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
 
 /* ==========================================================================
    7. Screens
@@ -1620,6 +1583,25 @@ input[type="checkbox"].switch:checked::before {
   padding-top: 0;
   padding-bottom: 0;
   font-size: var(--text-sm);
+}
+
+/* Below the sidebar breakpoint the switcher's field labels are visually hidden
+   (still read by assistive tech) so the title and both selects fit one row. */
+@media (max-width: 1023px) {
+  .page-header-title h1 { flex-shrink: 0; }
+
+  .cli-switch-controls { flex-wrap: nowrap; }
+
+  .cli-switch-controls label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .cli-switch-controls select { max-width: 150px; }
 }
 
 /* lg and up: sticky sidebar column, collapsible to an icon rail. */
