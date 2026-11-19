@@ -82,16 +82,16 @@ pub fn router(state: AppState) -> Router<AppState> {
 
 /// Terminal capability variables every PTY (login or project terminal) must carry,
 /// so TUIs handle keys and colors even when the Gateway runs as a service.
+/// Applied at the PTY spawn sites only: headless chat and cron runs must not get them.
 pub fn apply_pty_term_env(env: &mut BTreeMap<String, String>) {
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("COLORTERM".to_string(), "truecolor".to_string());
 }
 
 /// Returns the isolated environment variables for spawning a CLI process or login PTY
-/// under the given account profile directory.
+/// under the given account profile directory (no terminal variables, see `apply_pty_term_env`).
 pub fn account_env_vars(provider: CliProvider, profile_dir: &StdPath) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    apply_pty_term_env(&mut env);
     env.insert(
         provider.config_env_var().to_string(),
         profile_dir.to_string_lossy().into_owned(),
@@ -542,7 +542,8 @@ async fn handle_pty_socket(
 ) {
     let (program, args) = account.provider.login_command();
     let working_dir = PathBuf::from(&account.profile_dir);
-    let env = account_env_vars(account.provider, &working_dir);
+    let mut env = account_env_vars(account.provider, &working_dir);
+    apply_pty_term_env(&mut env);
     let invocation = PtyInvocation {
         provider: account.provider,
         program: program.to_string(),

@@ -996,6 +996,12 @@ async fn native_jsonl_session_discovery_and_cross_account_resume_continuity() {
         Some(claude_a.profile_dir.as_str())
     );
     assert!(!invocations[0].args.contains(&"--resume".to_string()));
+    for inv in &invocations {
+        assert!(
+            !inv.env.contains_key("TERM") && !inv.env.contains_key("COLORTERM"),
+            "headless chat turns must not carry PTY terminal variables"
+        );
+    }
 
     assert_eq!(
         invocations[1].env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
