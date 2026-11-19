@@ -83,26 +83,26 @@ pub(crate) fn WorkspaceFilesGitBrowser(state: WorkspaceBrowserState) -> impl Int
 
     view! {
         <section data-view="files-git">
-            <section class="panel-card workspace-header-card">
+            <section class="card workspace-header-card">
                 <div>
-                    <h2>{state.project_name}</h2>
-                    <p class="subtitle" style="margin:0">{state.workspace_path}</p>
+                    <h2 class="card-title">{state.project_name}</h2>
+                    <p class="card-description workspace-path">{state.workspace_path}</p>
                 </div>
                 <div class="files-git-controls">
                     <label class="toggle-label">
-                        <input type="checkbox" id="toggle-gitignore" checked=state.respect_gitignore />
+                        <input type="checkbox" class="switch" id="toggle-gitignore" checked=state.respect_gitignore />
                         <span>"Respect .gitignore"</span>
                     </label>
-                    <button class="btn-secondary" type="button" id="refresh-workspace-btn">"Refresh"</button>
+                    <button class="btn-secondary btn-sm" type="button" id="refresh-workspace-btn">"Refresh"</button>
                 </div>
             </section>
             <div class="files-git-grid">
-                <section class="panel-card file-tree-pane">
+                <section class="card file-tree-pane">
                     <div class="pane-head"><h3>"Files"</h3></div>
                     {(!state.read_only).then(|| view!{
                         <form id="new-file-form" class="new-file-form">
                             <input name="path" aria-label="New file path" placeholder="new/file.txt" required />
-                            <button class="btn-secondary" type="submit" aria-label="Create file">"+"</button>
+                            <button class="btn-secondary btn-sm" type="submit" aria-label="Create file">"+"</button>
                         </form>
                     })}
                     <div class="tree-scroll">
@@ -116,15 +116,15 @@ pub(crate) fn WorkspaceFilesGitBrowser(state: WorkspaceBrowserState) -> impl Int
                         }}
                     </div>
                 </section>
-                <section class="panel-card editor-pane">
+                <section class="card editor-pane">
                     <div class="editor-toolbar">
-                        <strong>{file_path}</strong>
+                        <strong class="editor-file-path">{file_path}</strong>
                         <div class="files-git-controls">
                             {if state.read_only {
-                                view! { <span class="role-badge">"Read-Only (Viewer)"</span> }.into_any()
+                                view! { <span class="badge badge-secondary">"Read-Only (Viewer)"</span> }.into_any()
                             } else {
                                 view! {
-                                    <button class="btn-primary" type="button" id="save-file-btn" disabled=!file_can_be_saved>
+                                    <button class="btn-primary btn-sm" type="button" id="save-file-btn" disabled=!file_can_be_saved>
                                         {if state.editor_dirty { "Save *" } else { "Save" }}
                                     </button>
                                 }.into_any()
@@ -141,12 +141,12 @@ pub(crate) fn WorkspaceFilesGitBrowser(state: WorkspaceBrowserState) -> impl Int
                         }.into_any(),
                     }}
                 </section>
-                <section class="panel-card git-pane">
+                <section class="card git-pane">
                     <div class="pane-head">
-                        <h3>"Git " {branch.map(|branch| view! { <span class="role-badge">{branch}</span> })}</h3>
+                        <h3>"Git " {branch.map(|branch| view! { <span class="badge badge-outline">{branch}</span> })}</h3>
                         <div class="files-git-controls">
-                            <button class="btn-secondary" type="button" id="diff-all-btn">"All"</button>
-                            <button class="btn-secondary" type="button" id="toggle-diff-mode-btn">{diff_label}</button>
+                            <button class="btn-secondary btn-sm" type="button" id="diff-all-btn">"All"</button>
+                            <button class="btn-outline btn-sm" type="button" id="toggle-diff-mode-btn" title="Toggle unified / split diff">{diff_label}</button>
                         </div>
                     </div>
                     <GitWorkspaceDetails status=state.git_status diff=state.git_diff
@@ -172,7 +172,7 @@ fn FileTreeList(
                     let is_collapsed = collapsed.get(&node.path).copied().unwrap_or_default();
                     view! {
                         <li>
-                            <button class="tree-node-btn" type="button" style=padding
+                            <button class="tree-node-btn list-row" type="button" style=padding
                                 aria-expanded=(!is_collapsed).to_string() data-dir-toggle=node.path>
                                 {if is_collapsed { "[+] " } else { "[-] " }} {node.name}
                             </button>
@@ -186,7 +186,7 @@ fn FileTreeList(
                     let is_selected = selected.as_ref() == Some(&node.path);
                     view! {
                         <li>
-                            <button class="tree-node-btn" class:active=is_selected type="button"
+                            <button class="tree-node-btn list-row" class:active=is_selected type="button"
                                 style=padding data-file-open=node.path>{node.name}</button>
                         </li>
                     }.into_any()
@@ -238,7 +238,7 @@ fn GitWorkspaceDetails(
             {commits.is_empty().then(|| view! { <p class="subtitle">"No commits"</p> })}
             {commits.into_iter().map(|commit| view! {
                 <div class="commit-item">
-                    <code>{commit.short_hash}</code>
+                    <code class="commit-hash">{commit.short_hash}</code>
                     <span class="commit-msg">{commit.message}</span>
                     <span class="commit-meta">{commit.author_name}</span>
                 </div>
@@ -258,8 +258,8 @@ fn GitChangeGroup(
         <div class="git-group-label">{format!("{title} ({})", changes.len())}</div>
         {changes.is_empty().then(|| view! { <p class="subtitle">"None"</p> })}
         {changes.into_iter().map(|change| view! {
-            <button class="git-change-item" type="button" data-diff-path=change.path.clone() data-diff-staged=staged.to_string()>
-                <span class=badge>{change.status}</span> " " {change.path.clone()}
+            <button class="git-change-item list-row" type="button" data-diff-path=change.path.clone() data-diff-staged=staged.to_string()>
+                <span class=badge>{change.status}</span><span class="git-change-path">{change.path.clone()}</span>
             </button>
         }).collect_view()}
     }
