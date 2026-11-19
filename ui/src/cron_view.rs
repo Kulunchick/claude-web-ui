@@ -90,28 +90,30 @@ pub fn CronView(
     };
 
     view! {
-        <section class="panel-card cron-panel">
-            <div class="pane-head">
+        <section class="card cron-panel">
+            <div class="panel-header-row">
                 <h2>"Cron schedules"</h2>
-                <button type="button" class="btn-secondary" disabled=move || busy.get()
-                    on:click=move |_| submit.run(Action::Refresh)>"Refresh"</button>
-                <Show when=writable>
-                    <button type="button" class="btn-primary" disabled=move || busy.get()
-                        on:click=new_schedule>"New schedule"</button>
-                </Show>
+                <div class="cron-toolbar">
+                    <button type="button" class="btn-outline btn-sm" disabled=move || busy.get()
+                        on:click=move |_| submit.run(Action::Refresh)>"Refresh"</button>
+                    <Show when=writable>
+                        <button type="button" class="btn-primary btn-sm" disabled=move || busy.get()
+                            on:click=new_schedule>"New schedule"</button>
+                    </Show>
+                </div>
             </div>
             <Show when=move || busy.get() && data.get().is_none()>
-                <p role="status">"Loading schedules…"</p>
+                <p class="cron-empty" role="status">"Loading schedules…"</p>
             </Show>
             <Show when=move || !error.get().is_empty()>
-                <p role="alert">{move || error.get()}</p>
+                <p class="alert-error" role="alert">{move || error.get()}</p>
             </Show>
             <Show when=move || writable() && editor.with(Option::is_some)>
                 <CronEditor editor=editor data=data busy=busy submit=submit />
             </Show>
             {move || data.get().map(|data| {
                 if data.schedules.jobs.is_empty() {
-                    return view! { <p>"No schedules yet."</p> }.into_any();
+                    return view! { <p class="cron-empty">"No schedules yet."</p> }.into_any();
                 }
                 let can_write = data.schedules.writable;
                 data.schedules.jobs.into_iter().map(|job| {
@@ -122,27 +124,32 @@ pub fn CronView(
                     let confirm_delete = RwSignal::new(false);
                     let toggle_label = if job.config.enabled { "Pause" } else { "Resume" };
                     view! {
-                        <article class="kanban-card">
-                            <h3>{job.config.prompt}</h3>
-                            <p><code>{job.config.expression}</code>" UTC · "
+                        <article class="cron-item">
+                            <div class="cron-item-head">
+                                <h3>{job.config.prompt}</h3>
+                                <span class=if job.config.enabled { "badge badge-success" } else { "badge badge-outline" }>
+                                    {if job.config.enabled { "Active" } else { "Paused" }}
+                                </span>
+                            </div>
+                            <p class="cron-item-meta"><code>{job.config.expression}</code>" UTC · "
                                 {job.next_run_at.map(|at| format!("Next run {at}")).unwrap_or_else(|| "Paused".into())}
                             </p>
-                            {can_write.then(|| view! { <div>
-                                <button type="button" class="btn-secondary" disabled=move || busy.get()
+                            {can_write.then(|| view! { <div class="cron-actions">
+                                <button type="button" class="btn-outline btn-xs" disabled=move || busy.get()
                                     on:click=move |_| editor.set(Some((edit_job.id.clone().into(), edit_job.config.clone())))>"Edit"</button>
-                                <button type="button" class="btn-secondary" disabled=move || busy.get()
+                                <button type="button" class="btn-outline btn-xs" disabled=move || busy.get()
                                     on:click=move |_| {
                                         submit.run(Action::Toggle(toggle_job.id.clone(), !toggle_job.config.enabled));
                                     }>{toggle_label}</button>
-                                <button type="button" class="btn-secondary" disabled=move || busy.get()
+                                <button type="button" class="btn-outline btn-xs" disabled=move || busy.get()
                                     on:click=move |_| submit.run(Action::Run(run_id.clone()))>"Run now"</button>
-                                <button type="button" class="btn-secondary" disabled=move || busy.get()
+                                <button type="button" class="btn-outline btn-xs" disabled=move || busy.get()
                                     on:click=move |_| {
                                         if confirm_delete.get() { submit.run(Action::Delete(delete_id.clone())); }
                                         else { confirm_delete.set(true); }
                                     }>{move || if confirm_delete.get() { "Confirm delete" } else { "Delete" }}</button>
                                 <Show when=move || confirm_delete.get()>
-                                    <button type="button" class="btn-secondary"
+                                    <button type="button" class="btn-ghost btn-xs"
                                         on:click=move |_| confirm_delete.set(false)>"Cancel delete"</button>
                                 </Show>
                             </div> })}
@@ -151,30 +158,34 @@ pub fn CronView(
                 }).collect_view().into_any()
             })}
         </section>
-        <section class="panel-card cron-panel">
-            <h2>"Run history"</h2>
+        <section class="card cron-panel">
+            <div class="panel-header-row">
+                <h2>"Run history"</h2>
+            </div>
             {move || data.get().map(|data| {
                 if data.runs.is_empty() {
-                    return view! { <p>"No runs yet."</p> }.into_any();
+                    return view! { <p class="cron-empty">"No runs yet."</p> }.into_any();
                 }
                 data.runs.into_iter().map(|run| {
                     let label = run.prompt;
                     view! {
-                        <article class="kanban-card">
-                            <h3>{label}</h3>
-                            <p>{format!("{} · {}", run.status.as_str().replace('_', " "),
-                                match run.trigger {
+                        <article class="cron-item">
+                            <div class="cron-item-head">
+                                <h3>{label}</h3>
+                                <span class=run_badge(run.status.as_str())>{run.status.as_str().replace('_', " ")}</span>
+                            </div>
+                            <p class="cron-item-meta">{match run.trigger {
                                     claude_web_ui_shared::cron::CronTrigger::Manual => "Manual",
                                     claude_web_ui_shared::cron::CronTrigger::Scheduled => "Scheduled",
-                                })}</p>
+                                }}</p>
                             <p>{format!("Queued {}", run.queued_at)}</p>
                             {run.started_at.map(|at| view! { <p>{format!("Started {at}")}</p> })}
                             {run.completed_at.map(|at| view! { <p>{format!("Completed {at}")}</p> })}
                             {run.summary.map(|value| view! { <p class="cron-run-summary">{value}</p> })}
-                            {run.error.map(|value| view! { <p>{value}</p> })}
-                            {run.notification_error.map(|value| view! { <p>{format!("Notification failed: {value}")}</p> })}
+                            {run.error.map(|value| view! { <p class="alert-error">{value}</p> })}
+                            {run.notification_error.map(|value| view! { <p class="alert-warning">{format!("Notification failed: {value}")}</p> })}
                             {run.session_id.map(|id| view! {
-                                <button type="button" class="btn-secondary"
+                                <button type="button" class="btn-outline btn-xs"
                                     on:click=move |_| open_session.run(id.clone())>"Open session"</button>
                             })}
                         </article>
@@ -182,6 +193,16 @@ pub fn CronView(
                 }).collect_view().into_any()
             })}
         </section>
+    }
+}
+
+fn run_badge(status: &str) -> &'static str {
+    match status {
+        "completed" => "badge badge-success",
+        "error" => "badge badge-destructive",
+        "waiting_approval" => "badge badge-warning",
+        "running" | "queued" => "badge badge-secondary",
+        _ => "badge badge-outline",
     }
 }
 
@@ -221,7 +242,7 @@ fn CronEditor(
     };
 
     view! {
-        <form class="kanban-form" on:submit=move |event: leptos::ev::SubmitEvent| {
+        <form class="kanban-form cron-form" on:submit=move |event: leptos::ev::SubmitEvent| {
             event.prevent_default();
             if let Some((id, config)) = editor.get_untracked() { submit.run(Action::Save(id, config)); }
         }>
@@ -290,13 +311,13 @@ fn CronEditor(
                 </select>
             </label>
             <label>
-                <input type="checkbox" prop:checked=move || config().is_some_and(|c| c.enabled)
+                <input type="checkbox" class="switch" prop:checked=move || config().is_some_and(|c| c.enabled)
                     on:change=move |ev| change(&|c| c.enabled = event_target_checked(&ev)) />
                 "Enabled"
             </label>
-            <div>
-                <button type="submit" class="btn-primary" disabled=move || busy.get()>"Save schedule"</button>
-                <button type="button" class="btn-secondary" on:click=move |_| editor.set(None)>"Cancel"</button>
+            <div class="kanban-form-actions">
+                <button type="submit" class="btn-primary btn-sm" disabled=move || busy.get()>"Save schedule"</button>
+                <button type="button" class="btn-outline btn-sm" on:click=move |_| editor.set(None)>"Cancel"</button>
             </div>
         </form>
     }
