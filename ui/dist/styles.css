@@ -1775,6 +1775,157 @@ input[type="checkbox"].switch:checked::before {
   .account-card .panel-header-row { flex-wrap: wrap; }
 }
 
+/* ---------- Screen: admin users & projects --------------------------------
+   section.admin-panel > .admin-grid (register project, create invite)
+                       + .admin-list-card x3 (users, projects, invites) of .list-row.admin-row */
+.admin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.admin-list-card { min-width: 0; }
+
+.admin-row,
+.asm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: auto;
+  cursor: default;
+}
+
+.admin-row-main,
+.asm-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.admin-row-title,
+.asm-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.admin-row-path,
+.asm-config-path { overflow-wrap: anywhere; }
+
+.admin-row-main > code { align-self: flex-start; max-width: 100%; }
+
+.admin-row > .btn,
+.admin-row > .btn-danger,
+.admin-row > .badge { flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .admin-row { flex-wrap: wrap; }
+}
+
+/* ---------- Screen: agents, skills & MCP ----------------------------------
+   div.asm-page > section.asm-header (title, .asm-controls of two .segmented, .tabs)
+                + .admin-grid.asm-grid of cards (list of .asm-row, editor form) */
+.asm-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.asm-header .subtitle { margin-bottom: var(--space-3); }
+
+.asm-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.asm-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.asm-control .field-label { margin-bottom: 0; }
+
+.asm-control .segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.asm-control .segmented-option { flex-shrink: 0; }
+
+.asm-tabs { margin-bottom: 0; }
+
+.asm-grid { align-items: start; }
+
+.asm-grid > .panel-card { min-width: 0; }
+
+.asm-empty { margin: 0; }
+
+.asm-row { flex-wrap: wrap; }
+
+.asm-row .btn-group { flex-shrink: 0; }
+
+.asm-row .asm-row-main { flex-basis: 12rem; }
+
+.asm-share-toggle { margin-bottom: var(--space-3); }
+
+.asm-companions { margin-top: var(--space-4); }
+
+.asm-comp-form { margin-top: var(--space-3); }
+
+.asm-section-title {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-tab);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.asm-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-2);
+}
+
+.asm-preset {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-glass);
+  color: var(--text-secondary);
+  font-family: var(--font-typewriter);
+  font-size: var(--text-sm);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.asm-preset:hover:not(:disabled) {
+  background: var(--tint-hover);
+  color: var(--text-primary);
+}
+
+.asm-preset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.asm-graphify-log { margin-top: var(--space-3); }
+
+@media (max-width: 640px) {
+  .asm-controls { flex-direction: column; gap: var(--space-3); }
+  .asm-control { width: 100%; }
+}
+
 /* ---------- Screen: chat & terminal ---------------------------------------
    section.chat-workspace > .chat-main (head, feed, composer, terminal)
                           + button.chat-rail-scrim + aside.chat-rail (search, sessions)
