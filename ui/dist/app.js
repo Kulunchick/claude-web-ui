@@ -525,6 +525,7 @@
     const submit = form.querySelector("button[type='submit']");
     if (submit.disabled) return;
     submit.disabled = true;
+    state.error = null;
     try {
       const fields = JSON.stringify(Object.fromEntries(new FormData(form)));
       const auth = JSON.parse(await leptos.submit_auth(state.screen, fields));

@@ -7,9 +7,10 @@ pub fn BootstrapAdminView(
 ) -> impl IntoView {
     view! {
         <form method="post" class="auth-card" id="bootstrap-form" data-view="bootstrap-admin">
+            <p class="auth-brand">"Claude Web UI"</p>
             <h2>"Initialize Gateway Admin"</h2>
             <p class="subtitle">"Create the first administrator account to secure this 24/7 gateway."</p>
-            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
+            {initial_error.map(|error| view! { <div class="alert alert-error" role="alert">{error}</div> })}
             <div class="form-group">
                 <label for="auth-username">"Username"</label>
                 <input
@@ -43,7 +44,7 @@ pub fn BootstrapAdminView(
                     placeholder="Minimum 8 characters"
                 />
             </div>
-            <button class="btn-primary" type="submit">"Create Admin Account"</button>
+            <button class="btn btn-primary btn-block" type="submit">"Create Admin Account"</button>
         </form>
     }
 }
@@ -55,9 +56,10 @@ pub fn LoginView(
 ) -> impl IntoView {
     view! {
         <form method="post" class="auth-card" id="login-form" data-view="login">
+            <p class="auth-brand">"Claude Web UI"</p>
             <h2>"Sign In to Claude Web UI"</h2>
             <p class="subtitle">"Authenticate with your username or email and password."</p>
-            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
+            {initial_error.map(|error| view! { <div class="alert alert-error" role="alert">{error}</div> })}
             <div class="form-group">
                 <label for="auth-identifier">"Username or Email"</label>
                 <input
@@ -80,7 +82,7 @@ pub fn LoginView(
                     placeholder="Password"
                 />
             </div>
-            <button class="btn-primary" type="submit">"Sign In"</button>
+            <button class="btn btn-primary btn-block" type="submit">"Sign In"</button>
             <Show when=move || on_switch_invite.is_some()>
                 <button
                     class="btn-link"
@@ -106,9 +108,10 @@ pub fn InviteRedemptionView(
 ) -> impl IntoView {
     view! {
         <form method="post" class="auth-card" id="invite-form" data-view="invite-redemption">
+            <p class="auth-brand">"Claude Web UI"</p>
             <h2>"Redeem Invite"</h2>
             <p class="subtitle">"Enter your single-use invite code and set your account credentials."</p>
-            {initial_error.map(|error| view! { <div class="alert-error" role="alert">{error}</div> })}
+            {initial_error.map(|error| view! { <div class="alert alert-error" role="alert">{error}</div> })}
             <div class="form-group">
                 <label for="auth-code">"Invite Code"</label>
                 <input
@@ -150,7 +153,7 @@ pub fn InviteRedemptionView(
                     type="password"
                 />
             </div>
-            <button class="btn-primary" type="submit">"Redeem & Join"</button>
+            <button class="btn btn-primary btn-block" type="submit">"Redeem & Join"</button>
             <Show when=move || on_switch_login.is_some()>
                 <button
                     class="btn-link"
