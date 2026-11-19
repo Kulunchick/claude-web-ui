@@ -1977,11 +1977,37 @@ input[type="checkbox"].switch:checked::before {
   gap: 10px;
 }
 
+[data-view="files-git"] {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+[data-view="files-git"] > .workspace-header-card { margin-bottom: var(--space-4); }
+.workspace-header-card > div:first-child { min-width: 0; }
+.workspace-path { overflow-wrap: anywhere; }
+
+/* Three panes -> tree | editor with git below -> one column, by the width of the
+   screen's own container rather than the viewport (the sidebar takes a variable share). */
 .files-git-grid {
   display: grid;
-  grid-template-columns: 260px 1fr 420px;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
+}
+.files-git-grid > * { min-width: 0; }
+
+@container (min-width: 720px) {
+  .files-git-grid { grid-template-columns: 240px minmax(0, 1fr); }
+  .files-git-grid > .git-pane { grid-column: 1 / -1; }
+}
+
+@container (min-width: 1240px) {
+  .files-git-grid { grid-template-columns: 240px minmax(0, 1fr) minmax(320px, 400px); }
+  .files-git-grid > .git-pane { grid-column: auto; }
+}
+
+@container (max-width: 520px) {
+  .workspace-header-card { flex-wrap: wrap; align-items: flex-start; }
 }
 
 .pane-head, .editor-toolbar {
@@ -1994,14 +2020,30 @@ input[type="checkbox"].switch:checked::before {
 
 .pane-head h3 {
   margin: 0;
-  font-size: var(--text-base);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-title);
+}
+
+.editor-toolbar { flex-wrap: wrap; }
+.editor-file-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-typewriter);
+  font-size: var(--text-md);
 }
 
 .new-file-form {
   display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
+.new-file-form input { min-width: 0; }
 
 .file-tree-list {
   list-style: none;
@@ -2014,28 +2056,11 @@ input[type="checkbox"].switch:checked::before {
   overflow: auto;
 }
 
+/* Tree rows are .list-row buttons; only density and the dynamic indent differ. */
 .tree-node-btn {
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius);
-  color: var(--text-secondary);
-  padding: 5px var(--space-2);
-  cursor: pointer;
-  font-family: var(--font-typewriter);
-  font-size: var(--text-md);
+  padding-top: 5px;
+  padding-bottom: 5px;
   white-space: nowrap;
-}
-
-.tree-node-btn:hover {
-  background: var(--tint-hover);
-  color: var(--text-primary);
-}
-
-.tree-node-btn.active {
-  background: var(--tint-active);
-  color: var(--text-primary);
 }
 
 .code-editor {
@@ -2061,26 +2086,15 @@ input[type="checkbox"].switch:checked::before {
 }
 
 .git-change-item {
-  width: 100%;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  text-align: left;
-  background: transparent;
   border: 1px solid var(--border-faint);
-  border-radius: var(--radius);
-  color: var(--text-secondary);
   padding: 6px var(--space-2);
   margin-bottom: var(--space-1);
-  cursor: pointer;
-  font-family: var(--font-typewriter);
   font-size: var(--text-sm);
 }
-
-.git-change-item:hover {
-  background: var(--tint-hover);
-  color: var(--text-primary);
-}
+.git-change-path { min-width: 0; overflow-wrap: anywhere; }
 
 .diff-unified {
   margin: 0;
@@ -2094,8 +2108,10 @@ input[type="checkbox"].switch:checked::before {
   max-height: 320px;
 }
 
-.diff-add { color: var(--diff-add-fg); background: var(--diff-add-bg); }
-.diff-rem { color: var(--diff-remove-fg); background: var(--diff-remove-bg); }
+/* Add/remove carry a left rule as well as a tint, so they stay apart without relying on hue. */
+.diff-unified > div { min-height: 1.4em; padding: 0 var(--space-2); border-left: 2px solid transparent; }
+.diff-add { color: var(--diff-add-fg); background: var(--diff-add-bg); border-left-color: var(--success) !important; }
+.diff-rem { color: var(--diff-remove-fg); background: var(--diff-remove-bg); border-left-color: var(--destructive-text) !important; }
 .diff-meta { color: var(--diff-meta-fg); }
 
 .diff-split-container {
@@ -2129,9 +2145,11 @@ input[type="checkbox"].switch:checked::before {
   word-break: break-all;
 }
 
-.diff-cell.diff-added { background: var(--diff-add-bg); color: var(--diff-add-fg); }
-.diff-cell.diff-removed { background: var(--diff-remove-bg); color: var(--diff-remove-fg); }
+.diff-cell { border-left: 2px solid transparent; }
+.diff-cell.diff-added { background: var(--diff-add-bg); color: var(--diff-add-fg); border-left-color: var(--success); }
+.diff-cell.diff-removed { background: var(--diff-remove-bg); color: var(--diff-remove-fg); border-left-color: var(--destructive-text); }
 .diff-cell.diff-empty { background: var(--diff-empty-bg); }
+.diff-cell code { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
 .diff-ln { color: var(--text-disabled); min-width: 24px; user-select: none; }
 
 .commit-item {
@@ -2143,7 +2161,8 @@ input[type="checkbox"].switch:checked::before {
   font-size: var(--text-sm);
 }
 
-.commit-msg { flex: 1; }
+.commit-hash { font-family: var(--font-mono); color: var(--text-secondary); }
+.commit-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .commit-meta { color: var(--text-tertiary); font-size: var(--text-xs); }
 
 /* ---------- Screen: kanban ------------------------------------------------ */

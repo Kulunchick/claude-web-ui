@@ -58,3 +58,66 @@ fn a_gateway_websocket_drives_the_tray_and_emits_one_notification_per_approval()
     assert_eq!(tray.label(), "Connected · Idle");
     assert!(tray.stop_target().is_none());
 }
+
+fn asset(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn the_profiles_window_uses_the_hermes_teal_tokens_and_only_its_own_files() {
+    let css = asset("styles.css");
+    let html = asset("index.html");
+    let js = asset("profiles.js");
+    // The token block is a copy of the dashboard's (ui/dist/styles.css sections 2-3).
+    assert!(css.contains("--background-base: #041c1c;"));
+    assert!(css.contains("--midground-base: #ffe6cb;"));
+    assert!(css.contains("ui/dist/styles.css"));
+    // style-src 'self': no inline styles; no CDN or other external URL.
+    assert!(!html.contains("<style") && !html.to_lowercase().contains(" style="));
+    assert!(!js.contains("setAttribute(\"style\"") && !js.contains(".style.cssText"));
+    assert!(!css.contains("data:"), "data: URIs would be blocked by the CSP");
+    // (index.html legitimately shows "https://gateway.example" as an input placeholder.)
+    let html = html.replace("placeholder=\"https://gateway.example\"", "");
+    for (name, text) in [("index.html", &html), ("styles.css", &css), ("profiles.js", &js)] {
+        assert!(
+            !text.contains("http://") && !text.contains("https://"),
+            "{name} references an external URL"
+        );
+    }
+}
+
+#[test]
+fn every_bundled_font_is_used_by_the_stylesheet_and_ships_with_its_licence() {
+    let css = asset("styles.css");
+    let fonts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+    let mut referenced = 0;
+    for part in css.split("url(\"").skip(1) {
+        let url = part.split('"').next().unwrap();
+        assert!(url.starts_with("./fonts/"), "{url} must be a local font");
+        let file = fonts.join(url.trim_start_matches("./fonts/"));
+        assert!(file.is_file(), "missing {}", file.display());
+        assert!(
+            file.parent().unwrap().join("OFL.txt").is_file(),
+            "no OFL.txt beside {}",
+            file.display()
+        );
+        referenced += 1;
+    }
+    assert!(css.contains("Unbounded-Cyrillic"), "Unbounded Cyrillic subset must be bundled");
+    assert!(css.contains("CourierPrime"));
+    // Nothing bundled that the stylesheet does not use.
+    let mut on_disk = 0;
+    for family in std::fs::read_dir(&fonts).unwrap() {
+        for f in std::fs::read_dir(family.unwrap().path()).unwrap() {
+            let f = f.unwrap().file_name().to_string_lossy().into_owned();
+            if f.ends_with(".woff2") {
+                on_disk += 1;
+                assert!(css.contains(&f), "{f} is bundled but unused");
+            }
+        }
+    }
+    assert_eq!(on_disk, referenced);
+}
