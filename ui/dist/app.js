@@ -90,6 +90,10 @@
     return data;
   }
 
+  // Only the OAuth login terminal drives the modal's Launch button, so the
+  // project terminal never flips the flag (see attachPtyTerminal's `oauth`).
+  let ptyReportsLive = false;
+
   function setPtyLive(live) {
     try { if (leptos && leptos.set_oauth_terminal_live) leptos.set_oauth_terminal_live(live); } catch {}
   }
@@ -655,12 +659,18 @@
     if (switcher && !switcher.contains(event.target)) switcher.open = false;
   });
 
+  // One Escape handler for every dismissible layer: it closes only the
+  // top-most open one (project switcher, then chat session rail, then the
+  // sidebar drawer), so a single key press never closes two layers.
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     const switcher = app.querySelector(".project-switcher[open]");
     if (switcher) {
       switcher.open = false;
       switcher.querySelector("summary").focus();
+    } else if (chatRailOpen) {
+      setChatRailOpen(false);
+      document.getElementById("chat-rail-toggle")?.focus();
     } else if (shell.drawerOpen) {
       setDrawerOpen(false);
       document.getElementById("sidebar-open-btn")?.focus();
@@ -729,10 +739,10 @@
     return `<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON_PATHS[name]}</svg>`;
   }
 
-  // `label` is trusted markup (entities allowed); the title attribute is the
-  // tooltip in the collapsed rail.
+  // `label` is trusted markup (entities allowed, so it is not re-escaped); only
+  // quotes are escaped for the title attribute, the tooltip in the collapsed rail.
   function navItem(id, label, iconName, active) {
-    return `<button class="nav-item${active ? " active" : ""}" id="${id}" type="button" title="${label}"${active ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-label">${label}</span></button>`;
+    return `<button class="nav-item${active ? " active" : ""}" id="${id}" type="button" title="${label.replace(/"/g, "&quot;")}"${active ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-label">${label}</span></button>`;
   }
 
   // Chat session rail: a right-side drawer below the large breakpoint. The open
@@ -752,13 +762,6 @@
     applyChatRailState();
   }
 
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && chatRailOpen) {
-      setChatRailOpen(false);
-      document.getElementById("chat-rail-toggle")?.focus();
-    }
-  });
-
   // ---------------------------------------------------------------------------
   // Page header API (for the screen renderers).
   //
@@ -768,7 +771,8 @@
   //
   // renderDashboard() resets the header to the screen's default (title from
   // SCREEN_TITLES, no count, no actions) and then runs the per-screen branch.
-  // Call setPageHeader() in that branch, or at any time after render to patch
+  // Call setPageHeader() in that branch (it then only updates the header state
+  // that the shell markup is built from), or at any time after render to patch
   // the live header in place without a re-render:
   //
   //   setPageHeader({ title: "CLI Accounts", count: state.adminAccounts.length });
@@ -780,10 +784,11 @@
   //   actions  trusted HTML placed before the CLI switcher; bind its ids in
   //            bindDashboardHandlers() like any other element
   //
-  // pageHeaderActionsSlot() returns the element that holds `actions`, e.g. to
-  // mount a Leptos island there after render.
   // ---------------------------------------------------------------------------
   const pageHeader = { title: "", count: null, actions: "" };
+  // True while render() is choosing the header: the DOM still holds the previous
+  // screen's header, which app.innerHTML is about to replace, so skip patching it.
+  let pageHeaderPending = false;
 
   const SCREEN_TITLES = {
     agents_skills_mcp: "Agents, Skills & MCP",
@@ -802,6 +807,7 @@
 
   function setPageHeader(patch) {
     Object.assign(pageHeader, patch);
+    if (pageHeaderPending) return;
     const title = document.getElementById("page-title");
     if (!title) return;
     if ("title" in patch) title.textContent = pageHeader.title;
@@ -810,11 +816,7 @@
       badge.textContent = hasPageHeaderCount() ? String(pageHeader.count) : "";
       badge.hidden = !hasPageHeaderCount();
     }
-    if ("actions" in patch) pageHeaderActionsSlot().innerHTML = pageHeader.actions || "";
-  }
-
-  function pageHeaderActionsSlot() {
-    return document.getElementById("page-header-actions-extra");
+    if ("actions" in patch) document.getElementById("page-header-actions-extra").innerHTML = pageHeader.actions || "";
   }
 
   function pageHeaderHtml() {
@@ -920,6 +922,7 @@
       : !activeProject ? "none"
       : state.projectTab;
     // Header defaults for the screen; the branches below may call setPageHeader().
+    pageHeaderPending = true;
     Object.assign(pageHeader, { title: SCREEN_TITLES[screen] || "", count: null, actions: "" });
 
     let mainHtml = "";
@@ -942,11 +945,14 @@
       `;
     } else {
       if (screen === "chat") {
-        pageHeader.actions = '<button class="btn-outline btn-sm" id="chat-rail-toggle" type="button" aria-controls="chat-rail" aria-expanded="false">Sessions</button>';
+        setPageHeader({
+          actions: '<button class="btn-outline btn-sm" id="chat-rail-toggle" type="button" aria-controls="chat-rail" aria-expanded="false">Sessions</button>',
+        });
       }
       mainHtml = screen === "files" ? '<div id="files-git-workspace"></div>' : screen === "kanban" ? '<div id="kanban-workspace"></div>' : screen === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>';
     }
 
+    pageHeaderPending = false;
     app.innerHTML = `
       <div class="dashboard-shell" data-screen="${esc(screen)}">
         ${sidebarHtml(activeProject, isAdmin)}
@@ -1029,6 +1035,9 @@
     if (modal) {
       const account = modal.step === "create" ? null : (state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account);
       leptos.mount_account_modal(document.getElementById("account-modal-host"), JSON.stringify({ step: modal.step, tab: modal.tab || "pty", account }));
+      focusAccountModal(modal);
+    } else {
+      accountModalFocusKey = null;
     }
     const asm = document.getElementById("asm-workspace");
     if (asm) {
@@ -1055,8 +1064,9 @@
   }
 
   // Terminal appearance, mirroring the hermes-agent dashboard terminal.
-  // xterm.js takes literal colors, so these hex values are the one deliberate exception
-  // to "no hard-coded colors". Keep every terminal color in this block.
+  // xterm.js takes literal colors, so the palette is read from the CSS custom properties
+  // --terminal-background / --terminal-foreground at attach time. These hex values are
+  // only the fallback for when the variables are unavailable (keep them in sync).
   const TERMINAL_COLORS = {
     background: "#000000",
     foreground: "#f0e6d2",
@@ -1069,8 +1079,15 @@
   const FALLBACK_PTY_COLS = 90;
   const FALLBACK_PTY_ROWS = 24;
 
+  // Reads --terminal-background / --terminal-foreground from styles.css so the
+  // palette lives in one place; TERMINAL_COLORS is only the fallback.
   function terminalTheme() {
-    const { background, foreground, selectionAlpha } = TERMINAL_COLORS;
+    const { selectionAlpha } = TERMINAL_COLORS;
+    let css = null;
+    try { css = getComputedStyle(document.documentElement); } catch {}
+    const read = (name, fallback) => (css && css.getPropertyValue(name).trim()) || fallback;
+    const background = read("--terminal-background", TERMINAL_COLORS.background);
+    const foreground = read("--terminal-foreground", TERMINAL_COLORS.foreground);
     return {
       background,
       foreground,
@@ -1109,12 +1126,14 @@
       document.fonts.load(`400 1em '${TERMINAL_FONT_FACE}'`),
       document.fonts.load(`700 1em '${TERMINAL_FONT_FACE}'`),
     ]).catch(() => {});
-    const timeout = new Promise((resolve) => setTimeout(resolve, TERMINAL_FONT_WAIT_MS));
-    return Promise.race([load, timeout]);
+    let timer = 0;
+    const timeout = new Promise((resolve) => { timer = setTimeout(resolve, TERMINAL_FONT_WAIT_MS); });
+    return Promise.race([load, timeout]).finally(() => clearTimeout(timer));
   }
 
-  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {
+  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath, oauth) {
     closeActivePty();
+    ptyReportsLive = Boolean(oauth);
     const host = document.getElementById(hostId);
     if (!host) return;
     const fallbackLog = document.getElementById(fallbackLogId);
@@ -1174,7 +1193,6 @@
     term.open(box);
     state.ptyTerminal = term;
     term.focus();
-    setPtyLive(true);
 
     const focusTerm = () => term.focus();
     host.addEventListener("click", focusTerm);
@@ -1238,8 +1256,8 @@
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`);
     state.ptySocket = ws;
-    setPtyLive(true);
-    const markEnded = () => { if (state.ptySocket === ws) setPtyLive(false); };
+    if (ptyReportsLive) setPtyLive(true);
+    const markEnded = () => { if (ptyReportsLive && state.ptySocket === ws) setPtyLive(false); };
     ws.onclose = markEnded;
     ws.onerror = markEnded;
     ws.onopen = () => {
@@ -1270,9 +1288,24 @@
     return ws;
   }
 
+  // Moves keyboard focus into the account modal when it opens or switches view:
+  // the create form's first control, or the credentials form on its tab. The OAuth
+  // tab is left alone so the terminal keeps focus. Keyed so re-renders of the same
+  // view (e.g. after an error) do not steal focus again.
+  let accountModalFocusKey = null;
+  function focusAccountModal(modal) {
+    const key = `${modal.step}:${modal.tab || "pty"}`;
+    if (key === accountModalFocusKey) return;
+    accountModalFocusKey = key;
+    const target = modal.step === "create" ? document.querySelector("#create-account-form select")
+      : modal.tab === "credentials" ? document.getElementById("cred-file-picker")
+      : null;
+    if (target) target.focus();
+  }
+
   function connectOAuthTerminal(accountId) {
     const wsPath = `/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}`;
-    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath);
+    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath, true);
   }
 
   function connectProjectTerminal(mode) {
@@ -1320,16 +1353,10 @@
   function bindDashboardHandlers() {
     // Project sections live in the sidebar next to the workspace screens, so
     // picking one also returns the top-level tab to the project view.
-    const kanbanTab = document.getElementById("proj-tab-kanban");
-    if (kanbanTab) kanbanTab.onclick = () => { state.tab = "overview"; state.projectTab = "kanban"; render(); };
-    const projTabChat = document.getElementById("proj-tab-chat");
-    if (projTabChat) projTabChat.onclick = () => { state.tab = "overview"; state.projectTab = "chat"; render(); };
-
-    const projTabCron = document.getElementById("proj-tab-cron");
-    if (projTabCron) projTabCron.onclick = () => { state.tab = "overview"; state.projectTab = "cron"; render(); };
-
-    const projTabFiles = document.getElementById("proj-tab-files");
-    if (projTabFiles) projTabFiles.onclick = () => { state.tab = "overview"; state.projectTab = "files"; render(); };
+    for (const section of ["chat", "files", "kanban", "cron"]) {
+      const tab = document.getElementById(`proj-tab-${section}`);
+      if (tab) tab.onclick = () => { state.tab = "overview"; state.projectTab = section; render(); };
+    }
 
     const newSessBtn = document.getElementById("new-chat-session-btn");
     if (newSessBtn) {

@@ -1105,6 +1105,9 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert!(js.contains("/credentials"));
     assert!(js.contains("leptos.mount_accounts_admin"));
     assert!(js.contains("leptos.mount_account_modal"));
+    // The Add Account button is rendered into the page header by app.js.
+    assert!(js.contains("id=\"open-add-account-btn\""));
+    assert!(js.contains("+ Add Account</button>"));
 
     let wasm_resp = h
         .server
@@ -1120,7 +1123,6 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert_eq!(wasm_resp.status(), StatusCode::OK);
     let wasm_bytes = wasm_resp.into_body().collect().await.unwrap().to_bytes();
     let wasm = String::from_utf8_lossy(&wasm_bytes);
-    assert!(wasm.contains("+ Add Account"));
     assert!(wasm.contains("Launch OAuth Terminal"));
     assert!(wasm.contains("Restart terminal"));
     assert!(wasm.contains("oauth-xterm-host"));

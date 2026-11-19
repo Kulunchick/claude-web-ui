@@ -1660,13 +1660,70 @@ input[type="checkbox"].switch:checked::before {
   .project-switcher-chevron { transition: none; }
 }
 
-/* ---------- Screen: admin (users & projects, CLI accounts, ACL) ----------- */
+/* ---------- Screen: admin users & projects --------------------------------
+   section.admin-panel > .admin-grid (register project, create invite)
+                       + .admin-list-card x3 (users, projects, invites) of .list-row.admin-row */
+/* .admin-grid is shared with the accounts and agents/skills/MCP screens. */
 .admin-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-4);
 }
 
+@media (max-width: 640px) {
+  .admin-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.admin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.admin-list-card { min-width: 0; }
+
+.admin-row,
+.asm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: auto;
+  cursor: default;
+}
+
+.admin-row-main,
+.asm-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.admin-row-title,
+.asm-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.admin-row-path,
+.asm-config-path { overflow-wrap: anywhere; }
+
+.admin-row-main > code { align-self: flex-start; max-width: 100%; }
+
+.admin-row > .btn,
+.admin-row > .btn-danger,
+.admin-row > .badge { flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .admin-row { flex-wrap: wrap; }
+}
+
+/* ---------- Screen: CLI accounts (accounts page, project ACL, Authenticate modal) --- */
 .accounts-page {
   display: flex;
   flex-direction: column;
@@ -1753,60 +1810,7 @@ input[type="checkbox"].switch:checked::before {
 .cred-files code { overflow-wrap: anywhere; }
 
 @media (max-width: 640px) {
-  .admin-grid { grid-template-columns: minmax(0, 1fr); }
   .account-card .panel-header-row { flex-wrap: wrap; }
-}
-
-/* ---------- Screen: admin users & projects --------------------------------
-   section.admin-panel > .admin-grid (register project, create invite)
-                       + .admin-list-card x3 (users, projects, invites) of .list-row.admin-row */
-.admin-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.admin-list-card { min-width: 0; }
-
-.admin-row,
-.asm-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  width: auto;
-  cursor: default;
-}
-
-.admin-row-main,
-.asm-row-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.admin-row-title,
-.asm-row-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.admin-row-path,
-.asm-config-path { overflow-wrap: anywhere; }
-
-.admin-row-main > code { align-self: flex-start; max-width: 100%; }
-
-.admin-row > .btn,
-.admin-row > .btn-danger,
-.admin-row > .badge { flex-shrink: 0; }
-
-@media (max-width: 640px) {
-  .admin-row { flex-wrap: wrap; }
 }
 
 /* ---------- Screen: agents, skills & MCP ----------------------------------

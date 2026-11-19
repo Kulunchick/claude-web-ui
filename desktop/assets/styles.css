@@ -145,7 +145,6 @@
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-display: "Unbounded", var(--font-sans);
   --font-typewriter: "Courier Prime", "Courier New", ui-monospace, monospace;
-  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
 
   /* Type scale */
   --text-2xs: 11px;
