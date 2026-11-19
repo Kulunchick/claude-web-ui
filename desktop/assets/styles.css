@@ -1,66 +1,351 @@
-:root {
-  color-scheme: light dark;
-  font: 16px/1.45 system-ui, sans-serif;
+/* Gateway Profiles window (desktop). Served from the app's own assets under
+   style-src 'self' (font-src falls back to default-src 'self'): no inline
+   styles, no CDN, fonts are local files under ./fonts/.
+
+   The "Hermes Teal" token blocks below (sections 2-3) are a deliberate COPY
+   of sections 2-3 of ui/dist/styles.css: this window is a local asset page
+   and cannot load the Gateway's stylesheet. Keep the variable names
+   identical and re-copy them when the dashboard's tokens change. Only the
+   font URLs differ (relative) and only the families/weights this window
+   uses are declared. */
+
+/* ==========================================================================
+   1. Fonts
+   ========================================================================== */
+@font-face {
+  font-family: "Unbounded";
+  src: url("./fonts/unbounded/Unbounded-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
+
+@font-face {
+  font-family: "Unbounded";
+  src: url("./fonts/unbounded/Unbounded-Cyrillic-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Courier Prime";
+  src: url("./fonts/courier-prime/CourierPrime-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ==========================================================================
+   2. Theme tokens: Hermes Teal
+   The only raw color values in this file. A theme preset overrides exactly
+   this block (e.g. under :root[data-theme="..."]); everything else derives.
+   ========================================================================== */
+:root {
+  --background-base: #041c1c;
+  --midground-base: #ffe6cb;
+  --terminal-background: #000000;
+  --terminal-foreground: #f0e6d2;
+  --destructive: #fb2c36;
+  --destructive-foreground: #ffffff;
+  --success: #4ade80;
+  --warning: #ffbd38;
+  --black: #000000;
+  --white: #ffffff;
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   3. Derived tokens (never raw colors here: only mixes of section 2)
+   ========================================================================== */
+:root {
+  /* Base aliases */
+  --background: var(--background-base);
+  --midground: var(--midground-base);
+  --foreground: var(--midground-base);
+
+  /* Surfaces: midground mixed into background */
+  --card: color-mix(in srgb, var(--midground) 4%, var(--background));
+  --popover: var(--card);
+  --secondary: color-mix(in srgb, var(--midground) 6%, var(--background));
+  --muted: color-mix(in srgb, var(--midground) 8%, var(--background));
+  --accent: color-mix(in srgb, var(--midground) 10%, var(--background));
+  --card-glass: color-mix(in srgb, var(--background) 80%, transparent);
+  --input-background: color-mix(in srgb, var(--background) 40%, transparent);
+  --code-background: color-mix(in srgb, var(--background) 60%, var(--black));
+
+  /* Borders and rules (midground at alpha) */
+  --border-faint: color-mix(in srgb, var(--midground) 10%, transparent);
+  --border: color-mix(in srgb, var(--midground) 15%, transparent);
+  --input: var(--border);
+  --border-strong: color-mix(in srgb, var(--midground) 20%, transparent);
+  --border-heavy: color-mix(in srgb, var(--midground) 30%, transparent);
+  --ring: color-mix(in srgb, var(--midground) 30%, transparent);
+
+  /* Text tiers */
+  --text-primary: var(--midground);
+  --text-secondary: color-mix(in srgb, var(--midground) 80%, transparent);
+  --text-tertiary: color-mix(in srgb, var(--midground) 65%, transparent);
+  --text-disabled: color-mix(in srgb, var(--midground) 45%, transparent);
+  --text-placeholder: color-mix(in srgb, var(--midground) 50%, transparent);
+  --text-on-midground: var(--background);
+
+  /* Interactive tints */
+  --tint-hover: color-mix(in srgb, var(--midground) 5%, transparent);
+  --tint-active: color-mix(in srgb, var(--midground) 10%, transparent);
+  --tint-badge: color-mix(in srgb, var(--midground) 7.5%, transparent);
+  --tint-strong: color-mix(in srgb, var(--midground) 15%, transparent);
+  --selection: color-mix(in srgb, var(--midground) 25%, transparent);
+
+  /* Status tints: <status>-tint for fills, <status>-border for rules */
+  --destructive-tint: color-mix(in srgb, var(--destructive) 12%, transparent);
+  --destructive-border: color-mix(in srgb, var(--destructive) 40%, transparent);
+  --destructive-text: color-mix(in srgb, var(--destructive) 70%, var(--midground));
+  --success-tint: color-mix(in srgb, var(--success) 12%, transparent);
+  --success-border: color-mix(in srgb, var(--success) 30%, transparent);
+  --warning-tint: color-mix(in srgb, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in srgb, var(--warning) 30%, transparent);
+
+  /* Diff colors (readable add/remove on the code background) */
+  --diff-add-fg: color-mix(in srgb, var(--success) 85%, var(--midground));
+  --diff-add-bg: var(--success-tint);
+  --diff-remove-fg: var(--destructive-text);
+  --diff-remove-bg: var(--destructive-tint);
+  --diff-meta-fg: var(--text-tertiary);
+  --diff-empty-bg: color-mix(in srgb, var(--midground) 2%, transparent);
+
+  /* Overlays */
+  --overlay: color-mix(in srgb, var(--black) 60%, transparent);
+  --overlay-blur: 4px;
+
+  /* Radius: square components; the terminal card is the only rounded thing */
+  --radius: 0;
+  --radius-terminal: 0.5rem;
+
+  /* Spacing scale (px so it does not follow the root font size) */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Control sizes */
+  --control-height: 36px;
+  --control-height-sm: 28px;
+  --control-height-xs: 24px;
+
+  /* Font families */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Unbounded", var(--font-sans);
+  --font-typewriter: "Courier Prime", "Courier New", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* Type scale */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --leading: 1.55;
+  --tracking-title: 0.08em;
+  --tracking-nav: 0.12em;
+  --tracking-tab: 0.1em;
+  --tracking-button: 0.2em;
+  --tracking-badge: 0.2em;
+
+  /* Shadows */
+  --shadow-bevel:
+    inset -1px -1px 0 0 color-mix(in srgb, var(--black) 50%, transparent),
+    inset 1px 1px 0 0 color-mix(in srgb, var(--white) 50%, transparent);
+  --shadow-bevel-soft:
+    inset -1px -1px 0 0 color-mix(in srgb, var(--black) 50%, transparent),
+    inset 1px 1px 0 0 color-mix(in srgb, var(--white) 16%, transparent);
+  --shadow-lg: 0 10px 30px color-mix(in srgb, var(--black) 45%, transparent);
+  --shadow-terminal: 0 8px 32px color-mix(in srgb, var(--black) 40%, transparent);
+  --focus-ring: 0 0 0 1px var(--ring);
+
+  /* Grain overlay (badges only) */
+  --grain-opacity: 0.12;
+}
+
+
+/* ==========================================================================
+   4. Base (subset of ui/dist/styles.css section 4)
+   ========================================================================== */
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
-  padding: 1.5rem;
+  padding: var(--space-6);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  background: var(--background);
+  color: var(--text-primary);
+  min-height: 100vh;
 }
 
+::selection { background: var(--selection); }
+* { scrollbar-color: var(--border-heavy) transparent; }
+
+h1, h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-title);
+  line-height: 1.25;
+}
+
+h1 { font-size: var(--text-lg); margin: 0 0 var(--space-4); }
+h2 { font-size: var(--text-md); margin: 0 0 var(--space-2); }
+
+input,
+select {
+  width: 100%;
+  height: var(--control-height);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--input);
+  background: var(--input-background);
+  color: var(--text-primary);
+  font-family: var(--font-typewriter);
+  font-size: var(--text-md);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input::placeholder { color: var(--text-placeholder); }
+select option { background: var(--background); color: var(--text-primary); }
+
+input:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+:focus { outline: none; }
+
+:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--border-heavy);
+  box-shadow: var(--focus-ring);
+}
+
+/* ==========================================================================
+   5. Components and layout (cards like the dashboard's .auth-card)
+   ========================================================================== */
 main {
-  margin: auto;
+  margin: 0 auto;
   max-width: 35rem;
 }
 
 section {
-  margin-top: 1rem;
-  border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas);
-  border-radius: .65rem;
-  padding: 1rem;
-}
-
-h1, h2 {
-  margin: 0 0 .75rem;
-}
-
-h1 {
-  font-size: 1.8rem;
-}
-
-h2 {
-  font-size: 1.1rem;
+  margin-top: var(--space-4);
+  background: var(--card-glass);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-6);
 }
 
 label {
   display: block;
-  font-weight: 550;
-  margin-top: .65rem;
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-nav);
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
-input, select, button {
-  font: inherit;
-  padding: .35rem .55rem;
-  border: 1px solid color-mix(in srgb, CanvasText 50%, Canvas);
-  border-radius: .35rem;
+label span {
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-tertiary);
 }
 
-input, select {
-  box-sizing: border-box;
-  width: 100%;
+/* Submit buttons mirror .btn (solid midground, bevel);
+   type="button" (Open Dashboard) mirrors .btn-secondary. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--midground);
+  color: var(--text-on-midground);
+  box-shadow: var(--shadow-bevel);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: var(--tracking-button);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, filter 120ms ease;
+}
+
+button:hover { background: color-mix(in srgb, var(--midground) 88%, var(--background)); }
+button:active { filter: invert(1); }
+
+button[type="button"] {
+  background: var(--tint-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-bevel-soft);
+}
+
+button[type="button"]:hover { background: color-mix(in srgb, var(--midground) 22%, transparent); }
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: .5rem;
-  margin-top: .9rem;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
-#status:empty {
-  display: none;
+/* Status banner (the dashboard's .alert-error look) */
+#status {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--destructive-tint);
+  border: 1px solid var(--destructive-border);
+  color: var(--destructive-text);
+  font-size: var(--text-sm);
 }
 
-details {
-  margin-top: .85rem;
+#status:empty { display: none; }
+
+details { margin-top: var(--space-4); }
+
+summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-nav);
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
+
+summary:hover { color: var(--text-primary); }
