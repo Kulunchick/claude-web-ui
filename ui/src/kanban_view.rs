@@ -166,17 +166,19 @@ pub fn KanbanView(
         }
     };
     view! {
-        <section class="panel-card kanban-panel">
-            <div class="pane-head">
-                <h2>"Kanban"</h2>
-                <button type="button" class="btn-secondary" on:click=move |_| submit.run(Action::Refresh)>"Refresh"</button>
+        <section class="kanban-panel">
+            <div class="kanban-toolbar">
+                <button type="button" class="btn-outline btn-sm" on:click=move |_| submit.run(Action::Refresh)>"Refresh"</button>
                 <Show when=move || !read_only>
-                    <button type="button" class="btn-primary" on:click=move |_| edit.run(None)>"New card"</button>
+                    <button type="button" class="btn-primary btn-sm" on:click=move |_| edit.run(None)>"New card"</button>
                 </Show>
             </div>
-            <Show when=move || !error.get().is_empty()><p role="alert">{move || error.get()}</p></Show>
+            <Show when=move || !error.get().is_empty()><p class="alert-error" role="alert">{move || error.get()}</p></Show>
             <Show when=move || editor.get().is_some() && !read_only>
-                <form class="kanban-form" on:submit=save>
+                <form class="card kanban-form" on:submit=save>
+                    <div class="panel-header-row">
+                        <h3>{move || if editor.get() == Some(None) { "New card" } else { "Edit card" }}</h3>
+                    </div>
                     <label>"Title"<input required prop:value=move || title.get() on:input=move |ev| title.set(event_target_value(&ev))/></label>
                     <label>"Description"<textarea prop:value=move || description.get() on:input=move |ev| description.set(event_target_value(&ev)) /></label>
                     <Show when=move || editor.get() == Some(None)>
@@ -211,20 +213,22 @@ pub fn KanbanView(
                             }}
                         </select>
                     </label>
-                    <label><input type="checkbox" prop:checked=move || dedicated.get()
+                    <label><input type="checkbox" class="switch" prop:checked=move || dedicated.get()
                         on:change=move |ev| dedicated.set(event_target_checked(&ev))/>"Create dedicated git branch"</label>
                     <label>"Branch name"<input prop:value=move || branch.get() on:input=move |ev| branch.set(event_target_value(&ev))/></label>
-                    <div>
-                        <button type="submit" class="btn-primary">"Save card"</button>
-                        <button type="button" class="btn-secondary" on:click=move |_| editor.set(None)>"Cancel"</button>
+                    <div class="kanban-form-actions">
+                        <button type="submit" class="btn-primary btn-sm">"Save card"</button>
+                        <button type="button" class="btn-outline btn-sm" on:click=move |_| editor.set(None)>"Cancel"</button>
                     </div>
                 </form>
             </Show>
             <Show when=move || diff.get().is_some()>
-                <section class="panel-card">
-                    <h3>"Card git diff"</h3>
+                <section class="card kanban-diff">
+                    <div class="panel-header-row">
+                        <h3>"Card git diff"</h3>
+                        <button type="button" class="btn-outline btn-sm" on:click=move |_| diff.set(None)>"Close diff"</button>
+                    </div>
                     <pre>{move || diff.get().unwrap_or_default()}</pre>
-                    <button type="button" class="btn-secondary" on:click=move |_| diff.set(None)>"Close diff"</button>
                 </section>
             </Show>
             <div class="kanban-board">
@@ -239,7 +243,10 @@ pub fn KanbanView(
                                     dragged.set(None);
                                 }
                             }>
-                            <h3>{column_label(column)}</h3>
+                            <div class="kanban-lane-head">
+                                <h3>{column_label(column)}</h3>
+                                <span class="badge badge-outline">{move || cards.with(|cards| cards.iter().filter(|card| card.column == column).count())}</span>
+                            </div>
                             {move || cards.get().into_iter().filter(|card| card.column == column)
                                 .enumerate().map(|(index, card)| {
                                     let id = StoredValue::new(card.id.clone());
@@ -267,26 +274,26 @@ pub fn KanbanView(
                                             {if let Some(session) = card.session_id.clone() {
                                                 view! { <button type="button" class="kanban-title"
                                                     on:click=move |_| open_session.run(session.clone())>{card.title}</button> }.into_any()
-                                            } else { view! { <strong>{card.title}</strong> }.into_any() }}
+                                            } else { view! { <strong class="kanban-card-title">{card.title}</strong> }.into_any() }}
                                             <p>{card.description}</p>
                                             {(!waiting.is_empty()).then(|| view!{ <p>"Waiting on " {waiting}</p> })}
-                                            {card.session_status.map(|status| view!{ <p>"CLI session " {status.as_str().replace('_', " ")}</p> })}
+                                            {card.session_status.map(|status| view!{ <p>"CLI session " <span class=status_badge(status.as_str())>{status.as_str().replace('_', " ")}</span></p> })}
                                             {card.git_branch_name.map(|name| view!{ <p>"Branch " <code>{name}</code></p> })}
-                                            {card.blocked_reason.map(|reason| view!{ <p>{reason}</p> })}
+                                            {card.blocked_reason.map(|reason| view!{ <p class="kanban-note-warning">{reason}</p> })}
                                             {card.result_summary.map(|summary| view!{ <p>{summary}</p> })}
                                             <div class="kanban-actions">
                                                 {card.session_id.map(|_| view! {
-                                                    <button type="button" class="btn-secondary"
+                                                    <button type="button" class="btn-outline btn-xs"
                                                         on:click=move |_| submit.run(Action::Diff(id.get_value()))>"Git diff"</button>
                                                 })}
                                                 <Show when=move || !read_only>
-                                                    <button type="button" class="btn-secondary"
+                                                    <button type="button" class="btn-outline btn-xs"
                                                         on:click=move |_| edit.run(Some(details.get_value()))>"Edit"</button>
                                                     <Show when=move || column == Column::Triage>
-                                                        <button type="button" class="btn-secondary"
+                                                        <button type="button" class="btn-outline btn-xs"
                                                             on:click=move |_| submit.run(Action::Decompose(id.get_value()))>"Decompose with Agent"</button>
                                                     </Show>
-                                                    <select aria-label="Move card" on:change=move |ev| {
+                                                    <select class="kanban-move" aria-label="Move card" on:change=move |ev| {
                                                         let value = event_target_value(&ev);
                                                         if let Some(column) = Column::ALL.into_iter().find(|column| column.as_str() == value) {
                                                             submit.run(Action::Move(id.get_value(), column, None));
@@ -324,6 +331,16 @@ fn selected_dependencies(event: &leptos::ev::SubmitEvent) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn status_badge(status: &str) -> &'static str {
+    match status {
+        "completed" => "badge badge-success",
+        "error" => "badge badge-destructive",
+        "waiting_approval" => "badge badge-warning",
+        "running" | "queued" => "badge badge-secondary",
+        _ => "badge badge-outline",
+    }
 }
 
 fn column_label(column: Column) -> &'static str {
