@@ -215,10 +215,10 @@ pub fn AdminUsersProjectsView(
     #[prop(default = Vec::new())] invites: Vec<InviteDto>,
 ) -> impl IntoView {
     view! {
-        <section class="admin-panel" data-view="admin-users-projects">
+        <section class="admin-panel admin-users-projects" data-view="admin-users-projects">
             <div class="admin-grid">
                 <form class="panel-card" id="create-project-form">
-                    <h3>"Register Project Workspace"</h3>
+                    <div class="panel-header-row"><h3>"Register Project Workspace"</h3></div>
                     <div class="form-group">
                         <label for="admin-project-name">"Project Name"</label>
                         <input id="admin-project-name" name="name" required />
@@ -230,7 +230,7 @@ pub fn AdminUsersProjectsView(
                     <button class="btn-primary" type="submit">"Register Project"</button>
                 </form>
                 <form class="panel-card" id="create-invite-form">
-                    <h3>"Generate Single-Use Invite"</h3>
+                    <div class="panel-header-row"><h3>"Generate Single-Use Invite"</h3></div>
                     <div class="form-group">
                         <label for="admin-invite-role">"Role"</label>
                         <select id="admin-invite-role" name="role">
@@ -252,31 +252,66 @@ pub fn AdminUsersProjectsView(
                     <button class="btn-primary" type="submit">"Create Invite"</button>
                 </form>
             </div>
-            <div class="panel-card">
-                <h3>"Users"</h3>
+            <div class="panel-card admin-list-card">
+                <div class="panel-header-row">
+                    <h3>"Users"</h3>
+                    <span class="badge badge-outline">{move || users.with(Vec::len)}</span>
+                </div>
                 <Show when=move || users.with(Vec::is_empty)><p class="subtitle">"No users."</p></Show>
                 <For
                     each=move || users.get()
                     key=|user| user.id.clone()
                     children=|user| view! {
-                        <div class="row">
-                            <div>
-                                <strong>{user.username}</strong> " (" {user.email} ") "
-                                <span class="role-badge">{user.role.as_str()}</span>
+                        <div class="list-row admin-row">
+                            <div class="admin-row-main">
+                                <div class="admin-row-title">
+                                    <strong class="truncate">{user.username}</strong>
+                                    <span class="badge">{user.role.as_str()}</span>
+                                </div>
+                                <span class="list-row-meta truncate">{user.email}</span>
                             </div>
-                            <button type="button" class="btn-danger" data-revoke-uid=user.id>"Revoke Sessions"</button>
+                            <button type="button" class="btn-danger btn-sm" data-revoke-uid=user.id>"Revoke Sessions"</button>
                         </div>
                     }
                 />
             </div>
-            <div class="panel-card">
-                <h3>"Invites"</h3>
+            <div class="panel-card admin-list-card">
+                <div class="panel-header-row">
+                    <h3>"Projects"</h3>
+                    <span class="badge badge-outline">{move || projects.with(Vec::len)}</span>
+                </div>
+                <Show when=move || projects.with(Vec::is_empty)><p class="subtitle">"No projects yet."</p></Show>
+                <For
+                    each=move || projects.get()
+                    key=|project| project.id.clone()
+                    children=|project| view! {
+                        <div class="list-row admin-row">
+                            <div class="admin-row-main">
+                                <strong class="truncate">{project.name}</strong>
+                                <span class="list-row-meta admin-row-path">{project.workspace_path}</span>
+                            </div>
+                        </div>
+                    }
+                />
+            </div>
+            <div class="panel-card admin-list-card">
+                <div class="panel-header-row">
+                    <h3>"Invites"</h3>
+                </div>
                 {invites.is_empty().then(|| view! { <p class="subtitle">"No invites yet."</p> })}
-                {invites.into_iter().map(|invite| view!{
-                    <div class="row">
-                        <div><code>{invite.code}</code> " " {invite.role.as_str()}</div>
-                        <span>{if invite.used_by.is_some() { "Used" } else { "Available" }}</span>
-                    </div>
+                {invites.into_iter().map(|invite| {
+                    let used = invite.used_by.is_some();
+                    view!{
+                        <div class="list-row admin-row">
+                            <div class="admin-row-main">
+                                <code class="admin-row-path">{invite.code}</code>
+                                <span class="list-row-meta">{invite.role.as_str()}</span>
+                            </div>
+                            <span class=if used { "badge badge-outline" } else { "badge badge-success" }>
+                                {if used { "Used" } else { "Available" }}
+                            </span>
+                        </div>
+                    }
                 }).collect_view()}
             </div>
         </section>

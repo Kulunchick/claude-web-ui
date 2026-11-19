@@ -556,7 +556,7 @@
     try {
       if (project) {
         const body = { name: fields.get("name"), workspace_path: fields.get("workspace_path") };
-        await api("/api/admin/projects", { method: "POST", body: JSON.stringify(body) });
+        await api("/api/projects", { method: "POST", body: JSON.stringify(body) });
         state.notice = "Project registered.";
       } else {
         const body = { role: fields.get("role"), project_ids: fields.getAll("project_ids") };

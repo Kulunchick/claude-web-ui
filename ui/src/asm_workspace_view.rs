@@ -88,9 +88,17 @@ pub struct AsmPreset {
 
 fn tab_class(active: bool) -> &'static str {
     if active {
-        "btn-secondary active"
+        "tab active"
     } else {
-        "btn-secondary"
+        "tab"
+    }
+}
+
+fn segment_class(active: bool) -> &'static str {
+    if active {
+        "segmented-option active"
+    } else {
+        "segmented-option"
     }
 }
 
@@ -103,7 +111,7 @@ pub fn AgentsSkillsMcpWorkspace(state: AsmWorkspaceState) -> impl IntoView {
     let body = if scope == ConfigScope::Project && !state.has_project {
         view! {
             <div class="panel-card">
-                <p class="subtitle">"Select a project from the sidebar or switch to Global Scope."</p>
+                <p class="subtitle asm-empty">"Select a project from the sidebar or switch to Global Scope."</p>
             </div>
         }
         .into_any()
@@ -116,29 +124,37 @@ pub fn AgentsSkillsMcpWorkspace(state: AsmWorkspaceState) -> impl IntoView {
     };
 
     view! {
-        <section class="panel-card" data-view="agents-skills-mcp">
-            <div class="panel-header-row">
-                <div>
+        <div class="asm-page" data-view="agents-skills-mcp">
+            <section class="panel-card asm-header">
+                <div class="panel-header-row">
                     <h2>"Agents, Skills & MCP Manager"</h2>
-                    <p class="subtitle">"Native CLI subagents, skills with cross-CLI symlink sharing, and MCP presets."</p>
                 </div>
-                <div class="tab-bar">
-                    <button class=tab_class(scope == ConfigScope::Project) data-asm-scope="project" type="button">"Project Scope"</button>
-                    <button class=tab_class(scope == ConfigScope::Global) data-asm-scope="global" type="button">"Global Scope"</button>
+                <p class="subtitle">"Native CLI subagents, skills with cross-CLI symlink sharing, and MCP presets."</p>
+                <div class="asm-controls">
+                    <div class="asm-control">
+                        <span class="field-label">"Scope"</span>
+                        <div class="segmented segmented-sm">
+                            <button class=segment_class(scope == ConfigScope::Project) aria-pressed=(scope == ConfigScope::Project).to_string() data-asm-scope="project" type="button">"Project Scope"</button>
+                            <button class=segment_class(scope == ConfigScope::Global) aria-pressed=(scope == ConfigScope::Global).to_string() data-asm-scope="global" type="button">"Global Scope"</button>
+                        </div>
+                    </div>
+                    <div class="asm-control">
+                        <span class="field-label">"CLI"</span>
+                        <div class="segmented segmented-sm">
+                            {CliProvider::ALL.into_iter().map(|p| view! {
+                                <button class=segment_class(p == provider) aria-pressed=(p == provider).to_string() data-asm-prov=p.as_str() type="button">{p.display_name()}</button>
+                            }).collect_view()}
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="tab-bar">
-                {CliProvider::ALL.into_iter().map(|p| view! {
-                    <button class=tab_class(p == provider) data-asm-prov=p.as_str() type="button">{p.display_name()}</button>
-                }).collect_view()}
-            </div>
-            <div class="tab-bar">
-                <button class=tab_class(sub_tab == "agents") data-asm-sub="agents" type="button">"Subagents"</button>
-                <button class=tab_class(sub_tab == "skills") data-asm-sub="skills" type="button">"Skills"</button>
-                <button class=tab_class(sub_tab == "mcp") data-asm-sub="mcp" type="button">"MCP Servers"</button>
-            </div>
-        </section>
-        {body}
+                <div class="tabs asm-tabs">
+                    <button class=tab_class(sub_tab == "agents") data-asm-sub="agents" type="button">"Subagents"</button>
+                    <button class=tab_class(sub_tab == "skills") data-asm-sub="skills" type="button">"Skills"</button>
+                    <button class=tab_class(sub_tab == "mcp") data-asm-sub="mcp" type="button">"MCP Servers"</button>
+                </div>
+            </section>
+            {body}
+        </div>
     }
 }
 
@@ -163,17 +179,18 @@ fn agents_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
         .map(|a| {
             let model = a.model.clone().unwrap_or_else(|| "inherit".into());
             view! {
-                <div class="row">
-                    <div>
-                        <strong>{a.name.clone()}</strong>
-                        " "
-                        <span class="role-badge">{model}</span>
-                        <p class="subtitle">{a.description.clone()}</p>
+                <div class="list-row asm-row">
+                    <div class="asm-row-main">
+                        <div class="asm-row-title">
+                            <strong class="truncate">{a.name.clone()}</strong>
+                            <span class="badge badge-outline">{model}</span>
+                        </div>
+                        <span class="list-row-meta">{a.description.clone()}</span>
                     </div>
                     <div class="btn-group">
-                        <button class="btn-secondary" data-asm-edit-agent=a.name.clone() type="button">"Edit"</button>
+                        <button class="btn-secondary btn-sm" data-asm-edit-agent=a.name.clone() type="button">"Edit"</button>
                         {can_edit.then(|| view! {
-                            <button class="btn-danger" data-asm-del-agent=a.name.clone() type="button">"Delete"</button>
+                            <button class="btn-danger btn-sm" data-asm-del-agent=a.name.clone() type="button">"Delete"</button>
                         })}
                     </div>
                 </div>
@@ -240,9 +257,9 @@ fn agents_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
     };
 
     view! {
-        <div class="admin-grid">
+        <div class="admin-grid asm-grid">
             <div class="panel-card">
-                <h3>{format!("Configured Subagents ({})", state.provider.display_name())}</h3>
+                <div class="panel-header-row"><h3>{format!("Configured Subagents ({})", state.provider.display_name())}</h3></div>
                 {rows}
                 {(!has_rows).then(|| view! { <p class="subtitle">"No subagents found in this scope."</p> })}
             </div>
@@ -282,19 +299,21 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
         .map(|s| {
             let shared = if s.is_shared { "true" } else { "false" };
             view! {
-                <div class="row">
-                    <div>
-                        <strong>{s.name.clone()}</strong>
-                        {s.is_shared.then(|| view! { " " <span class="role-badge">"Shared"</span> })}
-                        <p class="subtitle">{s.description.clone()}</p>
+                <div class="list-row asm-row">
+                    <div class="asm-row-main">
+                        <div class="asm-row-title">
+                            <strong class="truncate">{s.name.clone()}</strong>
+                            {s.is_shared.then(|| view! { <span class="badge badge-success">"Shared"</span> })}
+                        </div>
+                        <span class="list-row-meta">{s.description.clone()}</span>
                     </div>
                     <div class="btn-group">
-                        <button class="btn-secondary" data-asm-edit-skill=s.name.clone() type="button">"Edit"</button>
+                        <button class="btn-secondary btn-sm" data-asm-edit-skill=s.name.clone() type="button">"Edit"</button>
                         {can_edit.then(|| view! {
-                            <button class="btn-secondary" data-asm-share-skill=s.name.clone() data-shared=shared type="button">
+                            <button class="btn-secondary btn-sm" data-asm-share-skill=s.name.clone() data-shared=shared type="button">
                                 {if s.is_shared { "Unshare" } else { "Share" }}
                             </button>
-                            <button class="btn-danger" data-asm-del-skill=s.name.clone() type="button">"Delete"</button>
+                            <button class="btn-danger btn-sm" data-asm-del-skill=s.name.clone() type="button">"Delete"</button>
                         })}
                     </div>
                 </div>
@@ -308,10 +327,10 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
         .iter()
         .map(|c| {
             view! {
-                <div class="row">
-                    <code>{c.relative_path.clone()}</code>
+                <div class="list-row asm-row">
+                    <code class="asm-row-main">{c.relative_path.clone()}</code>
                     {(can_edit && has_name).then(|| view! {
-                        <button class="btn-danger" data-asm-del-comp=c.relative_path.clone() type="button">"Remove"</button>
+                        <button class="btn-danger btn-sm" data-asm-del-comp=c.relative_path.clone() type="button">"Remove"</button>
                     })}
                 </div>
             }
@@ -319,20 +338,20 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
         .collect_view();
 
     view! {
-        <div class="admin-grid">
+        <div class="admin-grid asm-grid">
             <div class="panel-card">
-                <h3>{format!("Skills ({})", state.provider.display_name())}</h3>
+                <div class="panel-header-row"><h3>{format!("Skills ({})", state.provider.display_name())}</h3></div>
                 {rows}
                 {(!has_rows).then(|| view! { <p class="subtitle">"No skills found in this scope."</p> })}
             </div>
             <div class="panel-card">
+                <div class="panel-header-row"><h3>"Skill & Companion Editor"</h3></div>
                 <form id="asm-skill-form">
-                    <h3>"Skill & Companion Editor"</h3>
                     <div class="form-group">
                         <label>"Skill Name"</label>
                         <input id="asm-skill-name" value=sel.name.clone() required disabled=read_only />
                     </div>
-                    <label class="checkbox-item" style="margin-bottom: 10px;">
+                    <label class="checkbox-item asm-share-toggle">
                         <input type="checkbox" id="asm-skill-share-toggle" checked=sel.is_shared disabled=read_only />
                         " Share Skill across CLIs"
                     </label>
@@ -342,12 +361,12 @@ fn skills_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
                     </div>
                     {can_edit.then(|| view! { <button class="btn-primary" type="submit">"Save Skill"</button> })}
                 </form>
-                <div style="margin-top: 16px;">
+                <div class="asm-companions">
                     <h4>"Companion Files (scripts/, references/, examples/)"</h4>
                     {comp_rows}
                     {(!has_comps).then(|| view! { <p class="subtitle">"No companion files yet."</p> })}
                     {can_edit.then(|| view! {
-                        <form id="asm-comp-form" style="margin-top: 10px;">
+                        <form id="asm-comp-form" class="asm-comp-form">
                             <div class="form-group">
                                 <label>"Relative Path"</label>
                                 <input id="asm-comp-path" value="scripts/helper.sh" required />
@@ -377,15 +396,15 @@ fn mcp_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
             let target = s.command.clone().or(s.url.clone()).unwrap_or_default();
             let line = format!("{target} {}", s.args.join(" "));
             view! {
-                <div class="row">
-                    <div>
-                        <strong>{s.name.clone()}</strong>
-                        <div class="project-path"><code>{line}</code></div>
+                <div class="list-row asm-row">
+                    <div class="asm-row-main">
+                        <strong class="truncate">{s.name.clone()}</strong>
+                        <span class="list-row-meta"><code>{line}</code></span>
                     </div>
                     <div class="btn-group">
                         {can_edit.then(|| view! {
-                            <button class="btn-secondary" data-asm-sync-mcp=s.name.clone() type="button">"Sync across CLIs"</button>
-                            <button class="btn-danger" data-asm-del-mcp=s.name.clone() type="button">"Delete"</button>
+                            <button class="btn-secondary btn-sm" data-asm-sync-mcp=s.name.clone() type="button">"Sync across CLIs"</button>
+                            <button class="btn-danger btn-sm" data-asm-del-mcp=s.name.clone() type="button">"Delete"</button>
                         })}
                     </div>
                 </div>
@@ -411,7 +430,7 @@ fn mcp_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
     let graphify = state.graphify_result.clone().filter(|r| !r.is_empty());
 
     view! {
-        <div class="admin-grid">
+        <div class="admin-grid asm-grid">
             <div class="panel-card">
                 <div class="panel-header-row">
                     <h3>"Native MCP Servers"</h3>
@@ -419,23 +438,23 @@ fn mcp_body(state: &AsmWorkspaceState) -> impl IntoView + use<> {
                         <button class="btn-secondary" id="asm-run-graphify-btn" type="button">"Run Graphify Index"</button>
                     })}
                 </div>
-                <p class="project-path">{cfg.config_path}</p>
+                <p class="project-path asm-config-path">{cfg.config_path}</p>
                 {rows}
                 {(!has_servers).then(|| view! { <p class="subtitle">"No MCP servers configured yet."</p> })}
-                <h4 style="margin-top: 14px;">"One-Click Presets"</h4>
-                <div class="btn-group">
+                <h4 class="asm-section-title">"One-Click Presets"</h4>
+                <div class="asm-preset-grid">
                     {presets.into_iter().map(|p| view! {
-                        <button class="btn-secondary" data-asm-preset=p.id type="button" disabled=read_only>
+                        <button class="asm-preset" data-asm-preset=p.id type="button" disabled=read_only>
                             {format!("+ {}", p.display_name)}
                         </button>
                     }).collect_view()}
                 </div>
                 {graphify.map(|out| view! {
-                    <pre class="xterm-fallback-log" style="margin-top: 12px;">{out}</pre>
+                    <pre class="xterm-fallback-log asm-graphify-log">{out}</pre>
                 })}
             </div>
             <form class="panel-card" id="asm-mcp-form">
-                <h3>"Add / Update MCP Server"</h3>
+                <div class="panel-header-row"><h3>"Add / Update MCP Server"</h3></div>
                 <div class="form-group">
                     <label>"Server Name"</label>
                     <input id="asm-mcp-name" placeholder="my-mcp" required disabled=read_only />
