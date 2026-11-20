@@ -134,6 +134,7 @@ impl GatewayServer {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/api/health", get(|| async { "ok" }))
+            .route("/api/version", get(gateway_version))
             .merge(auth::router(self.state.clone()))
             .merge(accounts::router(self.state.clone()))
             .merge(messenger::router())
@@ -211,4 +212,9 @@ async fn serve_embedded_ui(uri: Uri) -> Response {
         .header(header::CONTENT_TYPE, mime.as_ref())
         .body(Body::from(asset.data.into_owned()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Public: the sidebar SYSTEM block shows which Gateway build is running.
+async fn gateway_version() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }))
 }

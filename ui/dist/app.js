@@ -90,10 +90,33 @@
     return data;
   }
 
+  // Only the OAuth login terminal drives the modal's Launch button, so the
+  // project terminal never flips the flag (see attachPtyTerminal's `oauth`).
+  let ptyReportsLive = false;
+
+  function setPtyLive(live) {
+    try { if (leptos && leptos.set_oauth_terminal_live) leptos.set_oauth_terminal_live(live); } catch {}
+  }
+
+  // Teardown callbacks for the live PTY (ResizeObserver, host listeners, ...).
+  // Run by closeActivePty, which every render() and every (re)launch goes through.
+  let ptyCleanups = [];
+
   function closeActivePty() {
+    setPtyLive(false);
+    const cleanups = ptyCleanups;
+    ptyCleanups = [];
+    for (const fn of cleanups) {
+      try { fn(); } catch {}
+    }
     if (state.ptySocket) {
-      try { state.ptySocket.close(); } catch {}
+      const ws = state.ptySocket;
       state.ptySocket = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch {}
     }
     if (state.ptyTerminal) {
       try { state.ptyTerminal.dispose(); } catch {}
@@ -506,6 +529,7 @@
     const submit = form.querySelector("button[type='submit']");
     if (submit.disabled) return;
     submit.disabled = true;
+    state.error = null;
     try {
       const fields = JSON.stringify(Object.fromEntries(new FormData(form)));
       const auth = JSON.parse(await leptos.submit_auth(state.screen, fields));
@@ -537,7 +561,7 @@
     try {
       if (project) {
         const body = { name: fields.get("name"), workspace_path: fields.get("workspace_path") };
-        await api("/api/admin/projects", { method: "POST", body: JSON.stringify(body) });
+        await api("/api/projects", { method: "POST", body: JSON.stringify(body) });
         state.notice = "Project registered.";
       } else {
         const body = { role: fields.get("role"), project_ids: fields.getAll("project_ids") };
@@ -571,6 +595,320 @@
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Dashboard shell: sidebar, page header, drawer.
+  //
+  // renderDashboard() rebuilds the shell on every render(), so whatever must
+  // survive a render (collapse, drawer, gateway status) lives in `shell` and is
+  // re-applied from there. Navigation state stays in `state.tab` (top level) and
+  // `state.projectTab` (project section); the sidebar items only drive it.
+  // ---------------------------------------------------------------------------
+  const SIDEBAR_COLLAPSED_KEY = "cwu_sidebar_collapsed";
+  const GATEWAY_STATUS_INTERVAL_MS = 30000;
+
+  const shell = {
+    collapsed: readSidebarCollapsed(),
+    drawerOpen: false,
+    gatewayStatus: "checking", // "checking" | "online" | "offline"
+    version: null,
+    statusTimer: null,
+  };
+
+  // Storage can be unavailable (private mode, blocked site data); the
+  // preference is then simply not remembered.
+  function readSidebarCollapsed() {
+    try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"; } catch { return false; }
+  }
+
+  function writeSidebarCollapsed(collapsed) {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch {}
+  }
+
+  function applyShellClasses() {
+    const root = app.querySelector(".dashboard-shell");
+    if (!root) return;
+    root.classList.toggle("is-collapsed", shell.collapsed);
+    root.classList.toggle("is-drawer-open", shell.drawerOpen);
+    const collapse = document.getElementById("sidebar-collapse-btn");
+    if (collapse) {
+      const label = shell.collapsed ? "Expand sidebar" : "Collapse sidebar";
+      collapse.setAttribute("aria-pressed", String(shell.collapsed));
+      collapse.setAttribute("aria-label", label);
+      collapse.title = label;
+    }
+    const hamburger = document.getElementById("sidebar-open-btn");
+    if (hamburger) hamburger.setAttribute("aria-expanded", String(shell.drawerOpen));
+  }
+
+  function setDrawerOpen(open) {
+    shell.drawerOpen = open;
+    applyShellClasses();
+  }
+
+  // Navigating from the drawer closes it. Capture phase, so the flag is cleared
+  // before the item's own onclick re-renders the shell.
+  app.addEventListener("click", (event) => {
+    if (shell.drawerOpen && event.target.closest(".sidebar .nav-item, .sidebar .project-item")) {
+      setDrawerOpen(false);
+    }
+  }, true);
+
+  // The project switcher is a <details> dropdown: an outside click closes it.
+  document.addEventListener("click", (event) => {
+    const switcher = app.querySelector(".project-switcher[open]");
+    if (switcher && !switcher.contains(event.target)) switcher.open = false;
+  });
+
+  // One Escape handler for every dismissible layer: it closes only the
+  // top-most open one (project switcher, then chat session rail, then the
+  // sidebar drawer), so a single key press never closes two layers.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const switcher = app.querySelector(".project-switcher[open]");
+    if (switcher) {
+      switcher.open = false;
+      switcher.querySelector("summary").focus();
+    } else if (chatRailOpen) {
+      setChatRailOpen(false);
+      document.getElementById("chat-rail-toggle")?.focus();
+    } else if (shell.drawerOpen) {
+      setDrawerOpen(false);
+      document.getElementById("sidebar-open-btn")?.focus();
+    }
+  });
+
+  function renderGatewayStatus() {
+    const el = document.getElementById("gateway-status");
+    if (!el) return;
+    const label = { checking: "Checking", online: "Online", offline: "Unreachable" }[shell.gatewayStatus];
+    el.dataset.status = shell.gatewayStatus;
+    el.title = `Gateway: ${label}`;
+    el.querySelector(".system-status-value").textContent = label;
+    const version = document.getElementById("gateway-version");
+    if (version) version.textContent = shell.version ? `v${shell.version}` : "";
+  }
+
+  async function refreshGatewayStatus() {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      shell.gatewayStatus = res.ok ? "online" : "offline";
+    } catch {
+      shell.gatewayStatus = "offline";
+    }
+    if (!shell.version && shell.gatewayStatus === "online") {
+      try {
+        const res = await fetch("/api/version", { cache: "no-store" });
+        if (res.ok) shell.version = (await res.json()).version || null;
+      } catch {}
+    }
+    renderGatewayStatus();
+  }
+
+  function startGatewayStatus() {
+    if (shell.statusTimer) return;
+    void refreshGatewayStatus();
+    shell.statusTimer = setInterval(() => {
+      if (!state.user) {
+        clearInterval(shell.statusTimer);
+        shell.statusTimer = null;
+        return;
+      }
+      void refreshGatewayStatus();
+    }, GATEWAY_STATUS_INTERVAL_MS);
+  }
+
+  // Inline 16px stroke icons for the nav rail (no icon font, no CDN).
+  const ICON_PATHS = {
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    files: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/>',
+    kanban: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+    cron: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    agents: '<rect x="4" y="8" width="16" height="12" rx="1"/><path d="M12 8V4"/><path d="M9 4h6"/><path d="M9 13v2"/><path d="M15 13v2"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.8-8.8"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/>',
+    folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    chevron: '<path d="m6 9 6 6 6-6"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+    rail: '<rect x="3" y="3" width="18" height="18" rx="1"/><path d="M9 3v18"/>',
+    menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+    close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  };
+
+  function icon(name) {
+    return `<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON_PATHS[name]}</svg>`;
+  }
+
+  // `label` is trusted markup (entities allowed, so it is not re-escaped); only
+  // quotes are escaped for the title attribute, the tooltip in the collapsed rail.
+  function navItem(id, label, iconName, active) {
+    return `<button class="nav-item${active ? " active" : ""}" id="${id}" type="button" title="${label.replace(/"/g, "&quot;")}"${active ? ' aria-current="page"' : ""}>${icon(iconName)}<span class="nav-label">${label}</span></button>`;
+  }
+
+  // Chat session rail: a right-side drawer below the large breakpoint. The open
+  // flag lives here because the chat view is re-mounted on every render.
+  let chatRailOpen = false;
+
+  function applyChatRailState() {
+    const root = app.querySelector(".chat-workspace");
+    if (!root) chatRailOpen = false;
+    if (root) root.classList.toggle("is-rail-open", chatRailOpen);
+    const toggle = document.getElementById("chat-rail-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", String(chatRailOpen));
+  }
+
+  function setChatRailOpen(open) {
+    chatRailOpen = open;
+    applyChatRailState();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Page header API (for the screen renderers).
+  //
+  // The 56px header above the scrolling content holds the page title, an
+  // optional count badge next to it, and an action slot on the right that ends
+  // with the CLI switcher island (#project-cli-workspace).
+  //
+  // renderDashboard() resets the header to the screen's default (title from
+  // SCREEN_TITLES, no count, no actions) and then runs the per-screen branch.
+  // Call setPageHeader() in that branch (it then only updates the header state
+  // that the shell markup is built from), or at any time after render to patch
+  // the live header in place without a re-render:
+  //
+  //   setPageHeader({ title: "CLI Accounts", count: state.adminAccounts.length });
+  //   setPageHeader({ actions: '<button class="btn btn-sm" id="my-action" type="button">New</button>' });
+  //   setPageHeader({ count: null }); // hides the badge
+  //
+  //   title    plain text (escaped)
+  //   count    number or short text shown as a badge; null/undefined/"" hides it
+  //   actions  trusted HTML placed before the CLI switcher; bind its ids in
+  //            bindDashboardHandlers() like any other element
+  //
+  // ---------------------------------------------------------------------------
+  const pageHeader = { title: "", count: null, actions: "" };
+  // True while render() is choosing the header: the DOM still holds the previous
+  // screen's header, which app.innerHTML is about to replace, so skip patching it.
+  let pageHeaderPending = false;
+
+  const SCREEN_TITLES = {
+    agents_skills_mcp: "Agents, Skills & MCP",
+    admin: "Users & Projects",
+    accounts: "CLI Accounts",
+    chat: "Chat & Terminal",
+    files: "Files & Git",
+    kanban: "Kanban",
+    cron: "Cron",
+    none: "No Project Selected",
+  };
+
+  function hasPageHeaderCount() {
+    return pageHeader.count !== null && pageHeader.count !== undefined && pageHeader.count !== "";
+  }
+
+  function setPageHeader(patch) {
+    Object.assign(pageHeader, patch);
+    if (pageHeaderPending) return;
+    const title = document.getElementById("page-title");
+    if (!title) return;
+    if ("title" in patch) title.textContent = pageHeader.title;
+    if ("count" in patch) {
+      const badge = document.getElementById("page-title-count");
+      badge.textContent = hasPageHeaderCount() ? String(pageHeader.count) : "";
+      badge.hidden = !hasPageHeaderCount();
+    }
+    if ("actions" in patch) document.getElementById("page-header-actions-extra").innerHTML = pageHeader.actions || "";
+  }
+
+  function pageHeaderHtml() {
+    const count = hasPageHeaderCount();
+    return `
+      <header class="page-header" id="page-header">
+        <div class="page-header-title">
+          <h1 id="page-title" class="truncate">${esc(pageHeader.title)}</h1>
+          <span class="badge badge-outline" id="page-title-count"${count ? "" : " hidden"}>${count ? esc(pageHeader.count) : ""}</span>
+        </div>
+        <div class="page-header-actions">
+          <div class="page-header-actions-extra" id="page-header-actions-extra">${pageHeader.actions || ""}</div>
+          <div id="project-cli-workspace"></div>
+        </div>
+      </header>
+    `;
+  }
+
+  function sidebarHtml(activeProject, isAdmin) {
+    const projectNav = activeProject ? `
+          <div class="nav-group">
+            ${navItem("proj-tab-chat", "Chat &amp; Terminal", "chat", state.tab === "overview" && state.projectTab === "chat")}
+            ${navItem("proj-tab-files", "Files &amp; Git", "files", state.tab === "overview" && state.projectTab === "files")}
+            ${navItem("proj-tab-kanban", "Kanban", "kanban", state.tab === "overview" && state.projectTab === "kanban")}
+            ${navItem("proj-tab-cron", "Cron", "cron", state.tab === "overview" && state.projectTab === "cron")}
+          </div>` : "";
+    const projectName = activeProject ? esc(activeProject.name) : "Select project";
+    const signOut = `Sign Out (${esc(state.user.username)})`;
+    return `
+      <aside class="sidebar" id="sidebar" aria-label="Navigation">
+        <div class="sidebar-header">
+          <div class="brand">
+            <span class="brand-name">Claude Web UI</span>
+          </div>
+          <button class="btn-ghost btn-icon btn-sm sidebar-collapse-btn" id="sidebar-collapse-btn" type="button" aria-controls="sidebar">${icon("rail")}</button>
+          <button class="btn-ghost btn-icon btn-sm sidebar-close-btn" id="sidebar-close-btn" type="button" aria-label="Close navigation" title="Close navigation">${icon("close")}</button>
+        </div>
+        <details class="project-switcher">
+          <summary class="project-switcher-trigger" title="Project: ${projectName}">
+            ${icon("folder")}
+            <span class="project-switcher-text">
+              <span class="project-switcher-label">Project</span>
+              <span class="project-switcher-name truncate">${projectName}</span>
+            </span>
+            <span class="project-switcher-chevron">${icon("chevron")}</span>
+          </summary>
+          <div class="project-switcher-menu">
+            <div id="project-list"></div>
+          </div>
+        </details>
+        <nav class="sidebar-nav">
+          ${projectNav}
+          <div class="nav-group">
+            <h3 class="nav-group-heading">Workspace</h3>
+            ${navItem("nav-asm", "Agents, Skills &amp; MCP", "agents", state.tab === "agents_skills_mcp")}
+            ${isAdmin ? navItem("nav-admin", "Admin: Users &amp; Projects", "users", state.tab === "admin") : ""}
+            ${isAdmin ? navItem("nav-accounts", "Admin: CLI Accounts", "key", state.tab === "accounts") : ""}
+          </div>
+        </nav>
+        <div class="sidebar-system">
+          <h3 class="nav-group-heading">System</h3>
+          <div class="system-status" id="gateway-status" data-status="${shell.gatewayStatus}">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="system-status-label">Gateway</span>
+            <span class="system-status-value">Checking</span>
+          </div>
+          <button class="nav-item" id="pair-messenger-btn" type="button" title="Pair Telegram or Discord">${icon("link")}<span class="nav-label">Pair Telegram or Discord</span></button>
+          <p class="subtitle sidebar-pair-result" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
+          <button class="nav-item" id="logout-btn" type="button" title="${signOut}">${icon("logout")}<span class="nav-label">${signOut}</span></button>
+          <div class="sidebar-version">
+            <span id="gateway-version">${shell.version ? `v${esc(shell.version)}` : ""}</span>
+            <span class="role-badge" title="Your role">${esc(state.user.role)}</span>
+          </div>
+        </div>
+      </aside>
+    `;
+  }
+
+  function bindShellHandlers() {
+    document.getElementById("sidebar-collapse-btn").onclick = () => {
+      shell.collapsed = !shell.collapsed;
+      writeSidebarCollapsed(shell.collapsed);
+      applyShellClasses();
+    };
+    document.getElementById("sidebar-open-btn").onclick = () => setDrawerOpen(true);
+    document.getElementById("sidebar-close-btn").onclick = () => setDrawerOpen(false);
+    document.getElementById("sidebar-scrim").onclick = () => setDrawerOpen(false);
+    applyShellClasses();
+    renderGatewayStatus();
+    startGatewayStatus();
+  }
+
   function renderDashboard() {
     closeActivePty();
     const activeProject = state.projects.find((p) => p.id === state.activeProjectId) || null;
@@ -578,14 +916,27 @@
     const errHtml = state.error ? `<div class="alert-error">${esc(state.error)}</div>` : "";
     const okHtml = state.notice ? `<div class="alert-success">${esc(state.notice)}</div>` : "";
 
+    // The screen being shown, derived from the two-level navigation state.
+    const screen = (state.tab === "admin" || state.tab === "accounts") && isAdmin ? state.tab
+      : state.tab === "agents_skills_mcp" ? state.tab
+      : !activeProject ? "none"
+      : state.projectTab;
+    // Header defaults for the screen; the branches below may call setPageHeader().
+    pageHeaderPending = true;
+    Object.assign(pageHeader, { title: SCREEN_TITLES[screen] || "", count: null, actions: "" });
+
     let mainHtml = "";
-    if (state.tab === "admin" && isAdmin) {
+    if (screen === "admin") {
       mainHtml = '<div id="admin-workspace"></div>';
-    } else if (state.tab === "accounts" && isAdmin) {
+    } else if (screen === "accounts") {
       mainHtml = '<div id="accounts-workspace"></div>';
-    } else if (state.tab === "agents_skills_mcp") {
+      setPageHeader({
+        count: state.adminAccounts.length,
+        actions: '<button class="btn btn-sm" id="open-add-account-btn" type="button">+ Add Account</button>',
+      });
+    } else if (screen === "agents_skills_mcp") {
       mainHtml = '<div id="asm-workspace"></div>';
-    } else if (!activeProject) {
+    } else if (screen === "none") {
       mainHtml = `
         <section class="panel-card">
           <h2>No Project Selected</h2>
@@ -593,47 +944,29 @@
         </section>
       `;
     } else {
-      mainHtml = `
-        <div class="tab-bar" style="margin:0;">
-          <button class="btn-secondary ${state.projectTab === "chat" ? "active" : ""}" id="proj-tab-chat" type="button">Chat &amp; Terminal</button>
-          <button class="btn-secondary ${state.projectTab === "files" ? "active" : ""}" id="proj-tab-files" type="button">Files &amp; Git</button>
-          <button class="btn-secondary ${state.projectTab === "kanban" ? "active" : ""}" id="proj-tab-kanban" type="button">Kanban</button>
-          <button class="btn-secondary ${state.projectTab === "cron" ? "active" : ""}" id="proj-tab-cron" type="button">Cron</button>
-        </div>
-        ${state.projectTab === "files" ? '<div id="files-git-workspace"></div>' : state.projectTab === "kanban" ? '<div id="kanban-workspace"></div>' : state.projectTab === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>'}
-      `;
+      if (screen === "chat") {
+        setPageHeader({
+          actions: '<button class="btn-outline btn-sm" id="chat-rail-toggle" type="button" aria-controls="chat-rail" aria-expanded="false">Sessions</button>',
+        });
+      }
+      mainHtml = screen === "files" ? '<div id="files-git-workspace"></div>' : screen === "kanban" ? '<div id="kanban-workspace"></div>' : screen === "cron" ? '<div id="cron-workspace"></div>' : '<div id="chat-workspace-host"></div>';
     }
 
+    pageHeaderPending = false;
     app.innerHTML = `
-      <div class="dashboard-shell">
-        <aside class="sidebar">
-          <div class="brand">
-            <h1>Claude Web UI</h1>
-            <span class="role-badge">${esc(state.user.role)}</span>
-          </div>
-          <div class="sidebar-section">
-            <h3>Projects</h3>
-            <div id="project-list"></div>
-          </div>
-          <div class="sidebar-section">
-            <h3>Workspace</h3>
-            <button class="nav-item ${state.tab === "agents_skills_mcp" ? "active" : ""}" id="nav-asm">Agents, Skills &amp; MCP</button>
-          </div>
-          ${isAdmin ? `
-            <div class="sidebar-section">
-              <button class="nav-item ${state.tab === "admin" ? "active" : ""}" id="nav-admin">Admin: Users &amp; Projects</button>
-              <button class="nav-item ${state.tab === "accounts" ? "active" : ""}" id="nav-accounts">Admin: CLI Accounts</button>
-            </div>` : ""}
-          <div class="sidebar-section">
-            <button class="btn-secondary" id="pair-messenger-btn">Pair Telegram or Discord</button>
-            <p class="subtitle" id="pair-messenger-result" aria-live="polite">${esc(state.messengerPairing || "")}</p>
-            <button class="btn-secondary" id="logout-btn">Sign Out (${esc(state.user.username)})</button>
-          </div>
-        </aside>
-        <main class="dashboard-main">
-          <div id="project-cli-workspace"></div>
-          ${errHtml}${okHtml}${mainHtml}
-        </main>
+      <div class="dashboard-shell" data-screen="${esc(screen)}">
+        ${sidebarHtml(activeProject, isAdmin)}
+        <button class="sidebar-scrim" id="sidebar-scrim" type="button" tabindex="-1" aria-label="Close navigation"></button>
+        <div class="dashboard-column">
+          <header class="mobile-header">
+            <button class="btn-ghost btn-icon btn-sm" id="sidebar-open-btn" type="button" aria-controls="sidebar" aria-label="Open navigation" title="Open navigation">${icon("menu")}</button>
+            <span class="brand-name">Claude Web UI</span>
+          </header>
+          ${pageHeaderHtml()}
+          <main class="dashboard-main">
+            ${errHtml}${okHtml}${mainHtml}
+          </main>
+        </div>
       </div>
       <div id="account-modal-host"></div>
     `;
@@ -687,6 +1020,7 @@
         turns: !nativeSource && detail?.turns ? detail.turns : [],
       }));
     }
+    applyChatRailState();
     const accounts = document.getElementById("accounts-workspace");
     if (accounts) {
       leptos.mount_accounts_admin(accounts, JSON.stringify({
@@ -701,6 +1035,9 @@
     if (modal) {
       const account = modal.step === "create" ? null : (state.adminAccounts.find((a) => a.id === modal.accountId) || modal.account);
       leptos.mount_account_modal(document.getElementById("account-modal-host"), JSON.stringify({ step: modal.step, tab: modal.tab || "pty", account }));
+      focusAccountModal(modal);
+    } else {
+      accountModalFocusKey = null;
     }
     const asm = document.getElementById("asm-workspace");
     if (asm) {
@@ -722,36 +1059,213 @@
     }
     const admin = document.getElementById("admin-workspace");
     if (admin) leptos.mount_admin(admin, JSON.stringify(state.adminUsers), JSON.stringify(state.projects), JSON.stringify(state.adminInvites));
+    bindShellHandlers();
     bindDashboardHandlers();
   }
 
-  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath) {
+  // Terminal appearance, mirroring the hermes-agent dashboard terminal.
+  // xterm.js takes literal colors, so the palette is read from the CSS custom properties
+  // --terminal-background / --terminal-foreground at attach time. These hex values are
+  // only the fallback for when the variables are unavailable (keep them in sync).
+  const TERMINAL_COLORS = {
+    background: "#000000",
+    foreground: "#f0e6d2",
+    selectionAlpha: "44", // ~27% alpha, appended to the foreground hex
+  };
+  const TERMINAL_FONT_FACE = "JetBrains Mono"; // self-hosted, see @font-face in styles.css
+  const TERMINAL_FONT_FAMILY = `'${TERMINAL_FONT_FACE}', 'Cascadia Mono', 'Fira Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace`;
+  const TERMINAL_SCROLLBACK = 5000;
+  const TERMINAL_FONT_WAIT_MS = 2000;
+  const FALLBACK_PTY_COLS = 90;
+  const FALLBACK_PTY_ROWS = 24;
+
+  // Reads --terminal-background / --terminal-foreground from styles.css so the
+  // palette lives in one place; TERMINAL_COLORS is only the fallback.
+  function terminalTheme() {
+    const { selectionAlpha } = TERMINAL_COLORS;
+    let css = null;
+    try { css = getComputedStyle(document.documentElement); } catch {}
+    const read = (name, fallback) => (css && css.getPropertyValue(name).trim()) || fallback;
+    const background = read("--terminal-background", TERMINAL_COLORS.background);
+    const foreground = read("--terminal-foreground", TERMINAL_COLORS.foreground);
+    return {
+      background,
+      foreground,
+      cursor: foreground,
+      cursorAccent: background,
+      selectionBackground: `${foreground}${selectionAlpha}`,
+    };
+  }
+
+  // Width used to pick the font size step: the host's width, or the viewport while the host is not laid out yet.
+  function terminalTierWidth(host) {
+    const w = Math.round(host.clientWidth);
+    if (w > 2) return w;
+    const vv = window.visualViewport ? window.visualViewport.width : Infinity;
+    return Math.round(Math.min(window.innerWidth, vv, document.documentElement.clientWidth || Infinity));
+  }
+
+  function terminalFontSizeForWidth(w) {
+    if (w < 300) return 7;
+    if (w < 360) return 8;
+    if (w < 420) return 9;
+    if (w < 520) return 10;
+    if (w < 720) return 11;
+    if (w < 1024) return 12;
+    return 14;
+  }
+
+  function terminalLineHeightForWidth(w) {
+    return w < 1024 ? 1.02 : 1.15;
+  }
+
+  // Resolves once the terminal web font is usable (or after a timeout), so fit() measures the real cell size.
+  function whenTerminalFontReady() {
+    if (!document.fonts || typeof document.fonts.load !== "function") return Promise.resolve();
+    const load = Promise.all([
+      document.fonts.load(`400 1em '${TERMINAL_FONT_FACE}'`),
+      document.fonts.load(`700 1em '${TERMINAL_FONT_FACE}'`),
+    ]).catch(() => {});
+    let timer = 0;
+    const timeout = new Promise((resolve) => { timer = setTimeout(resolve, TERMINAL_FONT_WAIT_MS); });
+    return Promise.race([load, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  function attachPtyTerminal(hostId, fallbackLogId, fallbackFormId, fallbackInputId, wsPath, oauth) {
     closeActivePty();
+    ptyReportsLive = Boolean(oauth);
     const host = document.getElementById(hostId);
     if (!host) return;
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let cols = 90;
-    let rows = 24;
-    let term = null;
     const fallbackLog = document.getElementById(fallbackLogId);
     const fallbackForm = document.getElementById(fallbackFormId);
 
-    if (typeof window.Terminal === "function") {
-      host.innerHTML = "";
-      term = new window.Terminal({ cols, rows, cursorBlink: true });
-      if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
-        term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+    if (typeof window.Terminal !== "function") {
+      if (fallbackLog && fallbackForm) {
+        fallbackLog.textContent = "Connecting to PTY...\n";
+        fallbackForm.style.display = "flex";
       }
-      term.open(host);
-      state.ptyTerminal = term;
-    } else if (fallbackLog && fallbackForm) {
-      fallbackLog.textContent = "Connecting to PTY...\n";
-      fallbackForm.style.display = "flex";
+      const ws = openPtySocket(wsPath, FALLBACK_PTY_COLS, FALLBACK_PTY_ROWS, null, fallbackLog);
+      if (fallbackForm) {
+        fallbackForm.onsubmit = (e) => {
+          e.preventDefault();
+          const inp = document.getElementById(fallbackInputId);
+          if (inp && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
+            inp.value = "";
+          }
+        };
+      }
+      return;
     }
 
-    const wsUrl = `${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`;
-    const ws = new WebSocket(wsUrl);
+    // xterm opens into an unpadded box filling the host, so the fit addon measures the real space.
+    host.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "xterm-fit-box";
+    host.appendChild(box);
+
+    const tierWidth = terminalTierWidth(host);
+    const term = new window.Terminal({
+      allowProposedApi: true, // required by the unicode11 addon
+      cursorBlink: true,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: terminalFontSizeForWidth(tierWidth),
+      lineHeight: terminalLineHeightForWidth(tierWidth),
+      letterSpacing: 0,
+      fontWeight: "400",
+      fontWeightBold: "700",
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      scrollback: TERMINAL_SCROLLBACK,
+      theme: terminalTheme(),
+    });
+    const fit = window.FitAddon && typeof window.FitAddon.FitAddon === "function"
+      ? new window.FitAddon.FitAddon()
+      : null;
+    if (fit) term.loadAddon(fit);
+    if (window.Unicode11Addon && typeof window.Unicode11Addon.Unicode11Addon === "function") {
+      term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
+      term.unicode.activeVersion = "11";
+    }
+    if (window.WebLinksAddon && typeof window.WebLinksAddon.WebLinksAddon === "function") {
+      term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+    }
+    term.open(box);
+    state.ptyTerminal = term;
+    term.focus();
+
+    const focusTerm = () => term.focus();
+    host.addEventListener("click", focusTerm);
+    ptyCleanups.push(() => host.removeEventListener("click", focusTerm));
+
+    // Re-pick font size/line height for the host width, then fit cols/rows to the host.
+    // term.onResize (below) forwards any grid change to the PTY as a `resize` frame.
+    const syncMetrics = () => {
+      if (state.ptyTerminal !== term) return;
+      // A hidden or detached host would make fit() collapse the grid to 1x1.
+      if (!host.isConnected || host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      const w = terminalTierWidth(host);
+      const fontSize = terminalFontSizeForWidth(w);
+      const lineHeight = terminalLineHeightForWidth(w);
+      if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
+      if (term.options.lineHeight !== lineHeight) term.options.lineHeight = lineHeight;
+      if (fit) {
+        try { fit.fit(); } catch {}
+      }
+    };
+
+    if (typeof ResizeObserver === "function") {
+      let frame = 0;
+      const observer = new ResizeObserver(() => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(syncMetrics);
+      });
+      observer.observe(host);
+      ptyCleanups.push(() => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+      });
+    }
+
+    let ws = null;
+    term.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+    term.onResize((sz) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
+      }
+    });
+
+    // Connect only once the web font is in, so the CLI's first frame is laid out for the measured size.
+    whenTerminalFontReady().then(() => {
+      if (state.ptyTerminal !== term) return; // disposed by render() or a restart while waiting
+      // open() measured the cell with a fallback face; changing the family forces xterm to re-measure.
+      term.options.fontFamily = "monospace";
+      term.options.fontFamily = TERMINAL_FONT_FAMILY;
+      if (typeof term.clearTextureAtlas === "function") term.clearTextureAtlas();
+      syncMetrics();
+      ws = openPtySocket(wsPath, term.cols, term.rows, term, null);
+    });
+  }
+
+  // Opens the PTY WebSocket at the given size and wires output to the terminal (or the fallback log).
+  function openPtySocket(wsPath, cols, rows, term, fallbackLog) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}${wsPath}&cols=${cols}&rows=${rows}`);
     state.ptySocket = ws;
+    if (ptyReportsLive) setPtyLive(true);
+    const markEnded = () => { if (ptyReportsLive && state.ptySocket === ws) setPtyLive(false); };
+    ws.onclose = markEnded;
+    ws.onerror = markEnded;
+    ws.onopen = () => {
+      // The grid may have been re-fitted between connecting and opening.
+      if (term && (term.cols !== cols || term.rows !== rows)) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      }
+    };
 
     ws.onmessage = (ev) => {
       try {
@@ -761,6 +1275,7 @@
           else if (fallbackLog) fallbackLog.innerHTML += linkifyUrls(msg.data);
         } else if (msg.type === "exit") {
           const note = `\r\n[Process exited with code ${msg.code}]\r\n`;
+          markEnded();
           if (term) term.write(note);
           else if (fallbackLog) fallbackLog.innerHTML += esc(note);
         } else if (msg.type === "error") {
@@ -770,33 +1285,27 @@
         }
       } catch {}
     };
+    return ws;
+  }
 
-    if (term) {
-      term.onData((data) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data }));
-        }
-      });
-      term.onResize((sz) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: sz.cols, rows: sz.rows }));
-        }
-      });
-    } else if (fallbackForm) {
-      fallbackForm.onsubmit = (e) => {
-        e.preventDefault();
-        const inp = document.getElementById(fallbackInputId);
-        if (inp && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data: inp.value + "\r" }));
-          inp.value = "";
-        }
-      };
-    }
+  // Moves keyboard focus into the account modal when it opens or switches view:
+  // the create form's first control, or the credentials form on its tab. The OAuth
+  // tab is left alone so the terminal keeps focus. Keyed so re-renders of the same
+  // view (e.g. after an error) do not steal focus again.
+  let accountModalFocusKey = null;
+  function focusAccountModal(modal) {
+    const key = `${modal.step}:${modal.tab || "pty"}`;
+    if (key === accountModalFocusKey) return;
+    accountModalFocusKey = key;
+    const target = modal.step === "create" ? document.querySelector("#create-account-form select")
+      : modal.tab === "credentials" ? document.getElementById("cred-file-picker")
+      : null;
+    if (target) target.focus();
   }
 
   function connectOAuthTerminal(accountId) {
     const wsPath = `/api/admin/accounts/${encodeURIComponent(accountId)}/login-pty?token=${encodeURIComponent(state.accessToken)}`;
-    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath);
+    attachPtyTerminal("oauth-xterm-host", "oauth-xterm-fallback", "oauth-fallback-input-form", "oauth-fallback-input", wsPath, true);
   }
 
   function connectProjectTerminal(mode) {
@@ -842,16 +1351,12 @@
   }
 
   function bindDashboardHandlers() {
-    const kanbanTab = document.getElementById("proj-tab-kanban");
-    if (kanbanTab) kanbanTab.onclick = () => { state.projectTab = "kanban"; render(); };
-    const projTabChat = document.getElementById("proj-tab-chat");
-    if (projTabChat) projTabChat.onclick = () => { state.projectTab = "chat"; render(); };
-
-    const projTabCron = document.getElementById("proj-tab-cron");
-    if (projTabCron) projTabCron.onclick = () => { state.projectTab = "cron"; render(); };
-
-    const projTabFiles = document.getElementById("proj-tab-files");
-    if (projTabFiles) projTabFiles.onclick = () => { state.projectTab = "files"; render(); };
+    // Project sections live in the sidebar next to the workspace screens, so
+    // picking one also returns the top-level tab to the project view.
+    for (const section of ["chat", "files", "kanban", "cron"]) {
+      const tab = document.getElementById(`proj-tab-${section}`);
+      if (tab) tab.onclick = () => { state.tab = "overview"; state.projectTab = section; render(); };
+    }
 
     const newSessBtn = document.getElementById("new-chat-session-btn");
     if (newSessBtn) {
@@ -928,8 +1433,16 @@
       };
     }
 
+    const railToggle = document.getElementById("chat-rail-toggle");
+    if (railToggle) railToggle.onclick = () => setChatRailOpen(!chatRailOpen);
+    const railScrim = document.getElementById("chat-rail-scrim");
+    if (railScrim) railScrim.onclick = () => setChatRailOpen(false);
+    const railClose = document.getElementById("chat-rail-close");
+    if (railClose) railClose.onclick = () => setChatRailOpen(false);
+
     document.querySelectorAll("[data-sid]").forEach((btn) => {
       btn.onclick = async () => {
+        chatRailOpen = false;
         state.activeSessionId = btn.dataset.sid;
         await loadProjectSessions();
         render();

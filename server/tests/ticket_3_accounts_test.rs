@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{header, Method, Request, StatusCode};
 use claude_web_ui_server::fakes::{FakeCliRunner, FakeMessengerTransport};
 use claude_web_ui_server::{GatewayConfig, GatewayServer};
 use claude_web_ui_shared::accounts::{
@@ -631,12 +631,17 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
         .await
         .expect("send resize");
         ws.send(WsMessage::Text(
-            json!({ "type": "input", "data": format!("oauth-code-{idx}\r") })
+            json!({ "type": "input", "data": format!("oauth-code-{idx}") })
                 .to_string()
                 .into(),
         ))
         .await
         .expect("send input");
+        ws.send(WsMessage::Text(
+            json!({ "type": "input", "data": "\r" }).to_string().into(),
+        ))
+        .await
+        .expect("send bare enter");
 
         // Wait until exit frame arrives
         let mut saw_exit = false;
@@ -658,7 +663,10 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
 
     assert_eq!(invocations[0].provider, CliProvider::ClaudeCode);
     assert_eq!(invocations[0].program, "claude");
-    assert_eq!(invocations[0].args, vec!["login".to_string()]);
+    assert_eq!(
+        invocations[0].args,
+        vec!["auth".to_string(), "login".to_string()]
+    );
     assert_eq!(invocations[0].cols, 100);
     assert_eq!(invocations[0].rows, 30);
     assert_eq!(
@@ -685,10 +693,16 @@ async fn oauth_login_pty_websocket_spawns_isolated_env_per_provider_and_rejects_
         Some(accounts[2].profile_dir.as_str())
     );
 
+    for inv in &invocations {
+        assert_eq!(inv.env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(inv.env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+    }
+
     let inputs = h.cli_runner.recorded_pty_inputs();
-    assert!(inputs.iter().any(|b| b == b"oauth-code-0\r"));
-    assert!(inputs.iter().any(|b| b == b"oauth-code-1\r"));
-    assert!(inputs.iter().any(|b| b == b"oauth-code-2\r"));
+    assert!(inputs.iter().any(|b| b == b"\r"), "bare enter must arrive as CR");
+    assert!(inputs.iter().any(|b| b == b"oauth-code-0"));
+    assert!(inputs.iter().any(|b| b == b"oauth-code-1"));
+    assert!(inputs.iter().any(|b| b == b"oauth-code-2"));
 
     let resizes = h.cli_runner.recorded_pty_resizes();
     assert_eq!(resizes.len(), 3);
@@ -947,6 +961,131 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     let html = String::from_utf8_lossy(&html_bytes);
     assert!(html.contains("Claude Web UI"));
     assert!(html.contains("xterm"));
+    // The terminal fits its host and supports wide glyphs, pinned like the other xterm assets.
+    assert!(html.contains("@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"));
+    assert!(html.contains("@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"));
+
+    // JetBrains Mono is self-hosted from the embedded assets with its OFL license.
+    // Unknown paths fall back to index.html with 200, so the content type is what proves it.
+    let font_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(font_resp.status(), StatusCode::OK);
+    let font_type = font_resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(font_type, "font/woff2");
+    let font_bytes = font_resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(font_bytes.starts_with(b"wOF2"));
+
+    let license_resp = h
+        .server
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/fonts/jetbrains-mono/OFL.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(license_resp.status(), StatusCode::OK);
+    let license_bytes = license_resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&license_bytes).contains("SIL OPEN FONT LICENSE"));
+
+    let css_resp = h
+        .server
+        .router()
+        .oneshot(Request::builder().uri("/styles.css").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let css_bytes = css_resp.into_body().collect().await.unwrap().to_bytes();
+    let css = String::from_utf8_lossy(&css_bytes);
+    assert!(css.contains("/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2"));
+
+    // Hermes Teal: the base tokens every other color is derived from.
+    for token in [
+        "--background-base: #041c1c;",
+        "--midground-base: #ffe6cb;",
+        "--terminal-background: #000000;",
+        "--terminal-foreground: #f0e6d2;",
+        "--destructive: #fb2c36;",
+        "--success: #4ade80;",
+        "--warning: #ffbd38;",
+    ] {
+        assert!(css.contains(token), "stylesheet is missing token `{token}`");
+    }
+
+    // Display and typewriter faces are self-hosted next to their OFL licenses.
+    for (font_path, license_path) in [
+        (
+            "/fonts/unbounded/Unbounded-Regular.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/unbounded/Unbounded-Bold.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        // Unbounded Cyrillic subset: the UI is used with Cyrillic content. JetBrains Mono is
+        // the full glyph set already; Courier Prime has no Cyrillic and falls back to Courier New.
+        (
+            "/fonts/unbounded/Unbounded-Cyrillic-Regular.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/unbounded/Unbounded-Cyrillic-Bold.woff2",
+            "/fonts/unbounded/OFL.txt",
+        ),
+        (
+            "/fonts/courier-prime/CourierPrime-Regular.woff2",
+            "/fonts/courier-prime/OFL.txt",
+        ),
+        (
+            "/fonts/courier-prime/CourierPrime-Bold.woff2",
+            "/fonts/courier-prime/OFL.txt",
+        ),
+    ] {
+        assert!(css.contains(font_path), "stylesheet does not load `{font_path}`");
+        let resp = h
+            .server
+            .router()
+            .oneshot(Request::builder().uri(font_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(content_type, "font/woff2", "{font_path} content type");
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(bytes.starts_with(b"wOF2"), "{font_path} is not woff2");
+
+        let resp = h
+            .server
+            .router()
+            .oneshot(Request::builder().uri(license_path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("SIL OPEN FONT LICENSE"),
+            "{license_path} is not the OFL"
+        );
+    }
 
     let js_resp = h
         .server
@@ -960,9 +1099,15 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert!(js.contains("leptos.mount_cli_switcher"));
     assert!(js.contains("cwu:switch-project-cli"));
     assert!(js.contains("/login-pty"));
+    // The shared attach routine focuses the terminal and reports liveness to the view.
+    assert!(js.contains("term.focus()"));
+    assert!(js.contains("set_oauth_terminal_live"));
     assert!(js.contains("/credentials"));
     assert!(js.contains("leptos.mount_accounts_admin"));
     assert!(js.contains("leptos.mount_account_modal"));
+    // The Add Account button is rendered into the page header by app.js.
+    assert!(js.contains("id=\"open-add-account-btn\""));
+    assert!(js.contains("+ Add Account</button>"));
 
     let wasm_resp = h
         .server
@@ -978,7 +1123,7 @@ async fn embedded_ui_serves_account_manager_oauth_xterm_and_header_switcher() {
     assert_eq!(wasm_resp.status(), StatusCode::OK);
     let wasm_bytes = wasm_resp.into_body().collect().await.unwrap().to_bytes();
     let wasm = String::from_utf8_lossy(&wasm_bytes);
-    assert!(wasm.contains("+ Add Account"));
     assert!(wasm.contains("Launch OAuth Terminal"));
+    assert!(wasm.contains("Restart terminal"));
     assert!(wasm.contains("oauth-xterm-host"));
 }
